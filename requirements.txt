@@ -1,34 +1,45 @@
 # Core Dependencies
-numpy==1.24.3
-opencv-python==4.8.0.76
+numpy>=1.24.0,<2.0.0
+opencv-python>=4.8.0
+Pillow>=10.0.0
 
-# Computer Vision & Facial Analysis
-mediapipe==0.10.3
-tensorflow==2.13.0
-tf-keras==2.13.0
-deepface==0.0.79
-
-# Image Processing
-Pillow==10.0.0
-scikit-image==0.21.0
-
-# IBM Watson & AI
-ibm-watson-machine-learning==1.0.327
-ibm-cloud-sdk-core==3.16.7
-requests==2.31.0
+# IBM Watson & AI (with compatible pandas version)
+ibm-watson-machine-learning>=1.0.327
+ibm-cloud-sdk-core>=3.16.0
+pandas>=1.5.0,<2.0.0
+requests>=2.31.0
 
 # Data Processing
-pandas==2.0.3
-scipy==1.11.1
+scipy>=1.11.0
 
 # Configuration & Utilities
-python-dotenv==1.0.0
-pyyaml==6.0.1
+python-dotenv>=1.0.0
+pyyaml>=6.0.0
 
-# Web Framework (optional for dashboard)
-fastapi==0.101.0
-uvicorn==0.23.2
+# Web Framework
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
 
-# Visualization (optional)
-plotly==5.16.1
-matplotlib==3.7.2
+# Visualization
+plotly>=5.16.0
+matplotlib>=3.7.0
+
+# Database drivers
+psycopg2-binary>=2.9.0
+pymongo>=4.5.0
+redis>=5.0.0
+
+# Computer Vision & Face Analysis
+mediapipe>=0.10.0
+deepface>=0.0.79
+tf-keras>=2.15.0
+
+# Testing & Quality
+pytest>=7.4.0
+pytest-cov>=4.1.0
+black>=23.7.0
+flake8>=6.1.0
+pylint>=3.0.0
+mypy>=1.4.1
+
+# Made with Bob

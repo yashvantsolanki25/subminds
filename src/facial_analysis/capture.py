@@ -3,7 +3,6 @@ Webcam capture module for facial expression analysis
 Production-ready implementation with comprehensive error handling
 """
 import cv2
-import mediapipe as mp
 import time
 import threading
 import logging
@@ -11,6 +10,13 @@ from collections import deque
 from typing import Optional, Dict, Any, List
 import numpy as np
 from pathlib import Path
+
+try:
+    import mediapipe as mp
+    MEDIAPIPE_AVAILABLE = True
+except ImportError:
+    MEDIAPIPE_AVAILABLE = False
+    logging.warning("MediaPipe not available. Install with: pip install mediapipe")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -59,30 +65,38 @@ class FacialCaptureModule:
             raise
         
         # Initialize MediaPipe Face Detection
-        try:
-            self.mp_face_detection = mp.solutions.face_detection
-            self.face_detection = self.mp_face_detection.FaceDetection(
-                min_detection_confidence=0.7,
-                model_selection=0
-            )
-            logger.info("MediaPipe Face Detection initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize face detection: {e}")
-            raise
+        self.mp_face_detection = None
+        self.face_detection = None
+        self.mp_face_mesh = None
+        self.face_mesh = None
         
-        # Initialize MediaPipe Face Mesh
-        try:
-            self.mp_face_mesh = mp.solutions.face_mesh
-            self.face_mesh = self.mp_face_mesh.FaceMesh(
-                max_num_faces=1,
-                refine_landmarks=True,
-                min_detection_confidence=0.7,
-                min_tracking_confidence=0.5
-            )
-            logger.info("MediaPipe Face Mesh initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize face mesh: {e}")
-            raise
+        if MEDIAPIPE_AVAILABLE:
+            try:
+                self.mp_face_detection = mp.solutions.face_detection
+                self.face_detection = self.mp_face_detection.FaceDetection(
+                    min_detection_confidence=0.7,
+                    model_selection=0
+                )
+                logger.info("MediaPipe Face Detection initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize face detection: {e}")
+                self.face_detection = None
+            
+            # Initialize MediaPipe Face Mesh
+            try:
+                self.mp_face_mesh = mp.solutions.face_mesh
+                self.face_mesh = self.mp_face_mesh.FaceMesh(
+                    max_num_faces=1,
+                    refine_landmarks=True,
+                    min_detection_confidence=0.7,
+                    min_tracking_confidence=0.5
+                )
+                logger.info("MediaPipe Face Mesh initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize face mesh: {e}")
+                self.face_mesh = None
+        else:
+            logger.warning("MediaPipe not available. Face detection disabled.")
         
         # Buffer for captured frames
         self.buffer = deque(maxlen=buffer_size)
@@ -198,6 +212,9 @@ class FacialCaptureModule:
         Returns:
             List of detected faces with bounding boxes
         """
+        if not self.face_detection:
+            return []
+            
         try:
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results = self.face_detection.process(rgb_frame)
@@ -230,6 +247,9 @@ class FacialCaptureModule:
         Returns:
             Dictionary containing landmarks or None if no face detected
         """
+        if not self.face_mesh:
+            return None
+            
         try:
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results = self.face_mesh.process(rgb_frame)

@@ -4,6 +4,9 @@ services:
   subminds:
     build: .
     container_name: subminds-app
+    ports:
+      - "8000:8000"  # Main application API
+      - "8050:8050"  # Dashboard
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -17,18 +20,25 @@ services:
       - MONGO_HOST=${MONGO_HOST:-mongodb}
       - MONGO_USER=${MONGO_USER:-subminds}
       - MONGO_PASSWORD=${MONGO_PASSWORD}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - DEBUG=${DEBUG:-True}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     devices:
-      - /dev/video0:/dev/video0  # Webcam access
+      - /dev/video0:/dev/video0  # Webcam access (optional on EC2)
     networks:
       - subminds-network
     depends_on:
       - postgres
       - mongodb
+      - redis
     restart: unless-stopped
 
   postgres:
     image: postgres:15-alpine
     container_name: subminds-postgres
+    ports:
+      - "5432:5432"
     environment:
       - POSTGRES_DB=subminds
       - POSTGRES_USER=${POSTGRES_USER:-subminds}
@@ -38,10 +48,17 @@ services:
     networks:
       - subminds-network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-subminds}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   mongodb:
     image: mongo:6
     container_name: subminds-mongodb
+    ports:
+      - "27017:27017"
     environment:
       - MONGO_INITDB_ROOT_USERNAME=${MONGO_USER:-subminds}
       - MONGO_INITDB_ROOT_PASSWORD=${MONGO_PASSWORD}
@@ -51,10 +68,33 @@ services:
     networks:
       - subminds-network
     restart: unless-stopped
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: subminds-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --requirepass ${REDIS_PASSWORD:-abcd@1234}
+    volumes:
+      - redis-data:/data
+    networks:
+      - subminds-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   postgres-data:
   mongodb-data:
+  redis-data:
 
 networks:
   subminds-network:
