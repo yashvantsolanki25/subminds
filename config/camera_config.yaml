@@ -1,0 +1,40 @@
+# Webcam Capture Configuration
+camera:
+  # Device Settings
+  device:
+    id: 0  # Default webcam
+    width: 1280
+    height: 720
+    fps: 30
+    
+  # Face Detection
+  face_detection:
+    model: "mediapipe"
+    min_detection_confidence: 0.7
+    min_tracking_confidence: 0.5
+    max_num_faces: 1
+    
+  # Face Mesh
+  face_mesh:
+    enabled: true
+    max_num_faces: 1
+    refine_landmarks: true
+    
+  # Recording Settings
+  recording:
+    enabled: true
+    format: "mp4"
+    codec: "mp4v"
+    save_path: "data/raw/video"
+    
+  # Buffer Settings
+  buffer:
+    max_size: 1000  # frames
+    flush_interval: 60  # seconds
+    
+  # Performance
+  performance:
+    use_threading: true
+    queue_size: 10
+
+# Made with Bob

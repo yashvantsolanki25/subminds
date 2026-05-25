@@ -1,0 +1,31 @@
+# Database Configuration
+database:
+  # PostgreSQL (Structured Data)
+  postgresql:
+    host: "${POSTGRES_HOST:localhost}"
+    port: 5432
+    database: "${POSTGRES_DB:subminds}"
+    user: "${POSTGRES_USER}"
+    password: "${POSTGRES_PASSWORD}"
+    pool_size: 10
+    max_overflow: 20
+    echo: false
+    
+  # MongoDB (Unstructured Data)
+  mongodb:
+    host: "${MONGO_HOST:localhost}"
+    port: 27017
+    database: "${MONGO_DB:subminds}"
+    user: "${MONGO_USER}"
+    password: "${MONGO_PASSWORD}"
+    auth_source: "admin"
+    
+  # Redis (Caching - Optional)
+  redis:
+    host: "${REDIS_HOST:localhost}"
+    port: 6379
+    db: 0
+    password: "${REDIS_PASSWORD}"
+    decode_responses: true
+
+# Made with Bob

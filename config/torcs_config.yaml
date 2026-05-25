@@ -1,0 +1,41 @@
+# TORCS Environment Configuration
+torcs:
+  # Server Settings
+  server:
+    host: "localhost"
+    port: 3101
+    vision_port: 3102
+    
+  # Environment Settings
+  environment:
+    vision: true
+    throttle: true
+    gear_change: false
+    
+  # Track Settings
+  track:
+    name: "aalborg"
+    category: "road"
+    
+  # Race Settings
+  race:
+    mode: "practice"
+    laps: 10
+    damage: false
+    fuel: false
+    lap_time: true
+    
+  # Performance Settings
+  performance:
+    max_steps: 10000
+    terminal_judge_start: 500
+    termination_limit_progress: 5
+    default_speed: 50
+    
+  # Data Collection
+  data_collection:
+    enabled: true
+    save_interval: 100  # steps
+    telemetry_rate: 30  # Hz
+
+# Made with Bob
