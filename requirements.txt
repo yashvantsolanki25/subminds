@@ -1,27 +1,16 @@
-# SubMinds - Python Dependencies
-# Project: Subconscious Decision Analysis for F1 Drivers
-# Version: 1.0.0
-
 # Core Dependencies
-python>=3.9
-
-# TORCS Integration
-gym==0.21.0
 numpy==1.24.3
-opencv-python==4.8.0
+opencv-python==4.8.0.76
 
 # Computer Vision & Facial Analysis
 mediapipe==0.10.3
-deepface==0.0.79
 tensorflow==2.13.0
-keras==2.13.1
-mtcnn==0.1.1
+tf-keras==2.13.0
+deepface==0.0.79
 
-# Image Processing & Art Analysis
+# Image Processing
 Pillow==10.0.0
 scikit-image==0.21.0
-matplotlib==3.7.2
-seaborn==0.12.2
 
 # IBM Watson & AI
 ibm-watson-machine-learning==1.0.327
@@ -32,30 +21,14 @@ requests==2.31.0
 pandas==2.0.3
 scipy==1.11.1
 
-# Database
-psycopg2-binary==2.9.7
-pymongo==4.4.1
-sqlalchemy==2.0.19
-
-# Web Framework & Dashboard
-fastapi==0.101.0
-uvicorn==0.23.2
-dash==2.12.1
-plotly==5.16.1
-streamlit==1.25.0
-
-# Utilities
+# Configuration & Utilities
 python-dotenv==1.0.0
 pyyaml==6.0.1
-python-multipart==0.0.6
-websockets==11.0.3
 
-# Testing
-pytest==7.4.0
-pytest-asyncio==0.21.1
-pytest-cov==4.1.0
+# Web Framework (optional for dashboard)
+fastapi==0.101.0
+uvicorn==0.23.2
 
-# Development
-black==23.7.0
-flake8==6.1.0
-mypy==1.4.1
+# Visualization (optional)
+plotly==5.16.1
+matplotlib==3.7.2

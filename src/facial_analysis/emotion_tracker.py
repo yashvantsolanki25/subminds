@@ -1,379 +1,429 @@
 """
-Real-time emotion tracking and history management
+Real-time emotion tracking module
+Production-ready implementation with comprehensive error handling
 """
+import time
+import logging
 from typing import Dict, Any, List, Optional
 from collections import deque
-from datetime import datetime
 import numpy as np
 
-from ..utils.logger import get_logger
+try:
+    from deepface import DeepFace
+    DEEPFACE_AVAILABLE = True
+except ImportError:
+    DEEPFACE_AVAILABLE = False
+    logging.warning("DeepFace not available. Emotion detection will be limited.")
 
-logger = get_logger(__name__)
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class EmotionTracker:
-    """Track emotions over time and detect patterns"""
+    """Track emotions over time with smoothing and trend analysis"""
     
-    def __init__(self, history_size: int = 1000):
+    EMOTIONS = ['angry', 'disgust', 'fear', 'happy', 'sad', 'surprise', 'neutral']
+    
+    def __init__(
+        self,
+        history_size: int = 100,
+        smoothing_window: int = 5,
+        confidence_threshold: float = 0.5
+    ):
         """
         Initialize emotion tracker
         
         Args:
-            history_size: Maximum number of emotion records to keep
+            history_size: Number of emotion readings to keep in history
+            smoothing_window: Window size for moving average smoothing
+            confidence_threshold: Minimum confidence for emotion detection
         """
         self.history_size = history_size
-        self.emotion_history = deque(maxlen=history_size)
-        self.stress_history = deque(maxlen=history_size)
+        self.smoothing_window = smoothing_window
+        self.confidence_threshold = confidence_threshold
         
-        logger.info(f"EmotionTracker initialized with history size: {history_size}")
+        # Emotion history
+        self.emotion_history: deque = deque(maxlen=history_size)
         
-    def add_emotion(
+        # Statistics
+        self.total_detections = 0
+        self.failed_detections = 0
+        
+        # Check DeepFace availability
+        if not DEEPFACE_AVAILABLE:
+            logger.warning("DeepFace not installed. Install with: pip install deepface")
+    
+    def detect_emotion(
         self,
-        emotion_data: Dict[str, Any],
-        timestamp: Optional[float] = None
-    ):
+        frame: np.ndarray,
+        enforce_detection: bool = False
+    ) -> Optional[Dict[str, Any]]:
         """
-        Add emotion data to history
+        Detect emotion in a frame
         
         Args:
-            emotion_data: Emotion detection results
-            timestamp: Optional timestamp (uses current time if not provided)
-        """
-        if timestamp is None:
-            timestamp = datetime.now().timestamp()
+            frame: Input frame (BGR format)
+            enforce_detection: Whether to enforce face detection
             
-        record = {
-            'timestamp': timestamp,
-            'dominant_emotion': emotion_data.get('dominant_emotion', 'neutral'),
-            'confidence': emotion_data.get('confidence', 0.0),
-            'valence': emotion_data.get('valence', 0.0),
-            'arousal': emotion_data.get('arousal', 0.0),
-            'emotions': emotion_data.get('emotions', {})
+        Returns:
+            Dictionary containing emotion data or None if detection fails
+        """
+        if not DEEPFACE_AVAILABLE:
+            return self._get_mock_emotion()
+        
+        try:
+            # Analyze frame with DeepFace
+            result = DeepFace.analyze(
+                frame,
+                actions=['emotion'],
+                enforce_detection=enforce_detection,
+                detector_backend='opencv',
+                silent=True
+            )
+            
+            # Handle both single face and multiple faces
+            if isinstance(result, list):
+                result = result[0] if result else None
+            
+            if result is None:
+                self.failed_detections += 1
+                return None
+            
+            # Extract emotion data
+            emotions = result.get('emotion', {})
+            dominant_emotion = result.get('dominant_emotion', 'neutral')
+            
+            # Calculate confidence
+            confidence = emotions.get(dominant_emotion, 0.0) / 100.0
+            
+            # Check confidence threshold
+            if confidence < self.confidence_threshold:
+                logger.debug(f"Low confidence detection: {confidence:.2f}")
+            
+            emotion_data = {
+                'timestamp': time.time(),
+                'dominant_emotion': dominant_emotion,
+                'confidence': confidence,
+                'all_emotions': emotions,
+                'valence': self._calculate_valence(emotions),
+                'arousal': self._calculate_arousal(emotions)
+            }
+            
+            # Add to history
+            self.emotion_history.append(emotion_data)
+            self.total_detections += 1
+            
+            return emotion_data
+            
+        except Exception as e:
+            logger.error(f"Error detecting emotion: {e}")
+            self.failed_detections += 1
+            return None
+    
+    def _calculate_valence(self, emotions: Dict[str, float]) -> float:
+        """
+        Calculate valence (negative to positive emotion)
+        
+        Args:
+            emotions: Dictionary of emotion scores
+            
+        Returns:
+            Valence score from -1 (negative) to 1 (positive)
+        """
+        # Positive emotions
+        positive = emotions.get('happy', 0) + emotions.get('surprise', 0) * 0.5
+        
+        # Negative emotions
+        negative = (
+            emotions.get('angry', 0) +
+            emotions.get('sad', 0) +
+            emotions.get('fear', 0) +
+            emotions.get('disgust', 0)
+        )
+        
+        # Normalize to -1 to 1
+        total = positive + negative
+        if total == 0:
+            return 0.0
+        
+        valence = (positive - negative) / total
+        return float(np.clip(valence, -1.0, 1.0))
+    
+    def _calculate_arousal(self, emotions: Dict[str, float]) -> float:
+        """
+        Calculate arousal (calm to excited)
+        
+        Args:
+            emotions: Dictionary of emotion scores
+            
+        Returns:
+            Arousal score from 0 (calm) to 1 (excited)
+        """
+        # High arousal emotions
+        high_arousal = (
+            emotions.get('angry', 0) +
+            emotions.get('fear', 0) +
+            emotions.get('surprise', 0) +
+            emotions.get('happy', 0) * 0.7
+        )
+        
+        # Low arousal emotions
+        low_arousal = (
+            emotions.get('sad', 0) +
+            emotions.get('neutral', 0) +
+            emotions.get('disgust', 0) * 0.5
+        )
+        
+        # Normalize to 0 to 1
+        total = high_arousal + low_arousal
+        if total == 0:
+            return 0.5
+        
+        arousal = high_arousal / total
+        return float(np.clip(arousal, 0.0, 1.0))
+    
+    def get_smoothed_emotion(self, window: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """
+        Get smoothed emotion over recent history
+        
+        Args:
+            window: Window size for smoothing (uses default if None)
+            
+        Returns:
+            Smoothed emotion data or None if insufficient history
+        """
+        if not self.emotion_history:
+            return None
+        
+        window = window or self.smoothing_window
+        recent = list(self.emotion_history)[-window:]
+        
+        if not recent:
+            return None
+        
+        # Average all emotion scores
+        emotion_sums = {emotion: 0.0 for emotion in self.EMOTIONS}
+        valence_sum = 0.0
+        arousal_sum = 0.0
+        
+        for data in recent:
+            emotions = data['all_emotions']
+            for emotion in self.EMOTIONS:
+                emotion_sums[emotion] += emotions.get(emotion, 0.0)
+            valence_sum += data['valence']
+            arousal_sum += data['arousal']
+        
+        count = len(recent)
+        
+        # Calculate averages
+        avg_emotions = {
+            emotion: score / count
+            for emotion, score in emotion_sums.items()
         }
         
-        self.emotion_history.append(record)
+        # Find dominant emotion
+        dominant = max(avg_emotions.items(), key=lambda x: x[1])
         
-        # Calculate and store stress level
-        stress_level = self._calculate_stress(emotion_data.get('emotions', {}))
-        self.stress_history.append({
-            'timestamp': timestamp,
-            'stress_level': stress_level
-        })
-        
-    def get_current_emotion(self) -> Optional[Dict[str, Any]]:
-        """Get the most recent emotion record"""
-        return self.emotion_history[-1] if self.emotion_history else None
-        
-    def get_emotion_history(self, n: int = 100) -> List[Dict[str, Any]]:
+        return {
+            'timestamp': time.time(),
+            'dominant_emotion': dominant[0],
+            'confidence': dominant[1] / 100.0,
+            'all_emotions': avg_emotions,
+            'valence': valence_sum / count,
+            'arousal': arousal_sum / count,
+            'window_size': count
+        }
+    
+    def get_emotion_trend(self, duration: float = 60.0) -> Dict[str, Any]:
         """
-        Get recent emotion history
+        Analyze emotion trends over a time period
         
         Args:
-            n: Number of records to retrieve
+            duration: Time period in seconds
             
         Returns:
-            List of emotion records
-        """
-        return list(self.emotion_history)[-n:]
-        
-    def get_dominant_emotion_over_time(
-        self,
-        time_window: float = 60.0
-    ) -> Optional[str]:
-        """
-        Get the dominant emotion over a time window
-        
-        Args:
-            time_window: Time window in seconds
-            
-        Returns:
-            Most frequent emotion in the time window
+            Dictionary containing trend analysis
         """
         if not self.emotion_history:
-            return None
-            
-        current_time = datetime.now().timestamp()
-        cutoff_time = current_time - time_window
+            return {'trend': 'insufficient_data'}
         
-        # Filter records within time window
-        recent_emotions = [
-            record['dominant_emotion']
-            for record in self.emotion_history
-            if record['timestamp'] >= cutoff_time
+        current_time = time.time()
+        cutoff_time = current_time - duration
+        
+        # Filter recent emotions
+        recent = [
+            data for data in self.emotion_history
+            if data['timestamp'] >= cutoff_time
         ]
         
-        if not recent_emotions:
-            return None
-            
-        # Find most common emotion
-        from collections import Counter
-        emotion_counts = Counter(recent_emotions)
-        return emotion_counts.most_common(1)[0][0]
+        if len(recent) < 2:
+            return {'trend': 'insufficient_data'}
         
-    def get_average_valence(self, time_window: float = 60.0) -> float:
-        """
-        Calculate average valence over time window
+        # Count emotion occurrences
+        emotion_counts = {emotion: 0 for emotion in self.EMOTIONS}
+        for data in recent:
+            emotion_counts[data['dominant_emotion']] += 1
         
-        Args:
-            time_window: Time window in seconds
-            
-        Returns:
-            Average valence score
-        """
-        if not self.emotion_history:
-            return 0.0
-            
-        current_time = datetime.now().timestamp()
-        cutoff_time = current_time - time_window
+        # Calculate valence and arousal trends
+        valences = [data['valence'] for data in recent]
+        arousals = [data['arousal'] for data in recent]
         
-        valences = [
-            record['valence']
-            for record in self.emotion_history
-            if record['timestamp'] >= cutoff_time
-        ]
+        # Detect trend direction
+        valence_trend = 'stable'
+        if len(valences) >= 3:
+            if valences[-1] > valences[0] + 0.2:
+                valence_trend = 'improving'
+            elif valences[-1] < valences[0] - 0.2:
+                valence_trend = 'declining'
         
-        return np.mean(valences) if valences else 0.0
-        
-    def get_average_arousal(self, time_window: float = 60.0) -> float:
-        """
-        Calculate average arousal over time window
-        
-        Args:
-            time_window: Time window in seconds
-            
-        Returns:
-            Average arousal score
-        """
-        if not self.emotion_history:
-            return 0.5
-            
-        current_time = datetime.now().timestamp()
-        cutoff_time = current_time - time_window
-        
-        arousals = [
-            record['arousal']
-            for record in self.emotion_history
-            if record['timestamp'] >= cutoff_time
-        ]
-        
-        return np.mean(arousals) if arousals else 0.5
-        
-    def get_stress_level(self, time_window: float = 60.0) -> float:
-        """
-        Calculate average stress level over time window
-        
-        Args:
-            time_window: Time window in seconds
-            
-        Returns:
-            Average stress level (0-10)
-        """
-        if not self.stress_history:
-            return 0.0
-            
-        current_time = datetime.now().timestamp()
-        cutoff_time = current_time - time_window
-        
-        stress_levels = [
-            record['stress_level']
-            for record in self.stress_history
-            if record['timestamp'] >= cutoff_time
-        ]
-        
-        return np.mean(stress_levels) if stress_levels else 0.0
-        
-    def detect_emotion_change(
-        self,
-        threshold: float = 0.5,
-        time_window: float = 10.0
-    ) -> Optional[Dict[str, Any]]:
+        return {
+            'duration': duration,
+            'sample_count': len(recent),
+            'emotion_distribution': emotion_counts,
+            'most_common_emotion': max(emotion_counts.items(), key=lambda x: x[1])[0],
+            'avg_valence': float(np.mean(valences)),
+            'avg_arousal': float(np.mean(arousals)),
+            'valence_trend': valence_trend,
+            'valence_std': float(np.std(valences)),
+            'arousal_std': float(np.std(arousals))
+        }
+    
+    def detect_emotion_change(self, threshold: float = 0.3) -> Optional[Dict[str, Any]]:
         """
         Detect significant emotion changes
         
         Args:
-            threshold: Minimum valence change to detect
-            time_window: Time window to check for changes
+            threshold: Minimum valence change to consider significant
             
         Returns:
-            Change detection result or None
+            Change detection data or None if no significant change
         """
         if len(self.emotion_history) < 2:
             return None
-            
-        current_time = datetime.now().timestamp()
-        cutoff_time = current_time - time_window
         
-        # Get recent records
-        recent = [
-            record for record in self.emotion_history
-            if record['timestamp'] >= cutoff_time
-        ]
+        current = self.emotion_history[-1]
+        previous = self.emotion_history[-2]
         
-        if len(recent) < 2:
-            return None
-            
-        # Compare first and last
-        first = recent[0]
-        last = recent[-1]
+        valence_change = current['valence'] - previous['valence']
+        arousal_change = current['arousal'] - previous['arousal']
         
-        valence_change = abs(last['valence'] - first['valence'])
-        
-        if valence_change >= threshold:
+        if abs(valence_change) >= threshold or abs(arousal_change) >= threshold:
             return {
-                'detected': True,
-                'from_emotion': first['dominant_emotion'],
-                'to_emotion': last['dominant_emotion'],
-                'valence_change': last['valence'] - first['valence'],
-                'time_span': last['timestamp'] - first['timestamp']
+                'timestamp': current['timestamp'],
+                'previous_emotion': previous['dominant_emotion'],
+                'current_emotion': current['dominant_emotion'],
+                'valence_change': float(valence_change),
+                'arousal_change': float(arousal_change),
+                'significant': True
             }
-            
+        
         return None
-        
-    def detect_stress_spike(
-        self,
-        threshold: float = 3.0,
-        time_window: float = 10.0
-    ) -> bool:
+    
+    def get_statistics(self) -> Dict[str, Any]:
         """
-        Detect sudden stress increase
+        Get tracker statistics
         
-        Args:
-            threshold: Minimum stress increase to detect
-            time_window: Time window to check
-            
         Returns:
-            True if stress spike detected
+            Dictionary containing statistics
         """
-        if len(self.stress_history) < 2:
-            return False
-            
-        current_time = datetime.now().timestamp()
-        cutoff_time = current_time - time_window
-        
-        recent = [
-            record for record in self.stress_history
-            if record['timestamp'] >= cutoff_time
-        ]
-        
-        if len(recent) < 2:
-            return False
-            
-        stress_increase = recent[-1]['stress_level'] - recent[0]['stress_level']
-        
-        return stress_increase >= threshold
-        
-    def get_emotion_statistics(
-        self,
-        time_window: float = 300.0
-    ) -> Dict[str, Any]:
-        """
-        Get comprehensive emotion statistics
-        
-        Args:
-            time_window: Time window in seconds
-            
-        Returns:
-            Dictionary with emotion statistics
-        """
-        if not self.emotion_history:
-            return {
-                'dominant_emotion': 'neutral',
-                'average_valence': 0.0,
-                'average_arousal': 0.5,
-                'average_stress': 0.0,
-                'emotion_distribution': {},
-                'sample_count': 0
-            }
-            
-        current_time = datetime.now().timestamp()
-        cutoff_time = current_time - time_window
-        
-        recent = [
-            record for record in self.emotion_history
-            if record['timestamp'] >= cutoff_time
-        ]
-        
-        if not recent:
-            return self.get_emotion_statistics(time_window * 2)
-            
-        # Calculate statistics
-        from collections import Counter
-        emotions = [r['dominant_emotion'] for r in recent]
-        emotion_counts = Counter(emotions)
+        success_rate = 0.0
+        if self.total_detections + self.failed_detections > 0:
+            success_rate = self.total_detections / (
+                self.total_detections + self.failed_detections
+            )
         
         return {
-            'dominant_emotion': emotion_counts.most_common(1)[0][0],
-            'average_valence': np.mean([r['valence'] for r in recent]),
-            'average_arousal': np.mean([r['arousal'] for r in recent]),
-            'average_stress': self.get_stress_level(time_window),
-            'emotion_distribution': dict(emotion_counts),
-            'sample_count': len(recent),
-            'time_window': time_window
+            'total_detections': self.total_detections,
+            'failed_detections': self.failed_detections,
+            'success_rate': success_rate,
+            'history_size': len(self.emotion_history),
+            'deepface_available': DEEPFACE_AVAILABLE
         }
+    
+    def _get_mock_emotion(self) -> Dict[str, Any]:
+        """
+        Get mock emotion data when DeepFace is not available
         
-    def _calculate_stress(self, emotions: Dict[str, float]) -> float:
-        """Calculate stress level from emotions"""
-        stress_weights = {
-            'angry': 1.0,
-            'fear': 1.0,
-            'disgust': 0.7,
-            'sad': 0.5,
-            'surprise': 0.3
+        Returns:
+            Mock emotion data
+        """
+        return {
+            'timestamp': time.time(),
+            'dominant_emotion': 'neutral',
+            'confidence': 0.0,
+            'all_emotions': {emotion: 0.0 for emotion in self.EMOTIONS},
+            'valence': 0.0,
+            'arousal': 0.5,
+            'mock': True
         }
-        
-        stress = sum(
-            emotions.get(emotion, 0) * weight
-            for emotion, weight in stress_weights.items()
-        )
-        
-        return min(stress / 10.0, 1.0) * 10
-        
-    def clear_history(self):
-        """Clear all emotion history"""
+    
+    def reset(self) -> None:
+        """Reset tracker state"""
         self.emotion_history.clear()
-        self.stress_history.clear()
-        logger.info("Emotion history cleared")
-        
-    def export_history(self) -> List[Dict[str, Any]]:
-        """Export emotion history for analysis"""
-        return list(self.emotion_history)
+        self.total_detections = 0
+        self.failed_detections = 0
+        logger.info("Emotion tracker reset")
 
 
 # Example usage
 if __name__ == "__main__":
-    from ..utils.logger import setup_logger
-    import time
+    import cv2
     
-    setup_logger(__name__, level="DEBUG")
+    print("Starting emotion tracker test...")
     
-    tracker = EmotionTracker(history_size=1000)
-    
-    # Simulate emotion tracking
-    emotions = ['happy', 'neutral', 'focused', 'stressed', 'calm']
-    
-    for i in range(10):
-        emotion_data = {
-            'dominant_emotion': emotions[i % len(emotions)],
-            'confidence': 0.8,
-            'valence': np.random.uniform(-0.5, 0.5),
-            'arousal': np.random.uniform(0.3, 0.7),
-            'emotions': {
-                'happy': np.random.uniform(0, 100),
-                'sad': np.random.uniform(0, 100),
-                'angry': np.random.uniform(0, 100),
-                'neutral': np.random.uniform(0, 100)
-            }
-        }
+    try:
+        tracker = EmotionTracker(history_size=100, smoothing_window=5)
+        camera = cv2.VideoCapture(0)
         
-        tracker.add_emotion(emotion_data)
-        time.sleep(0.5)
+        if not camera.isOpened():
+            print("Cannot open camera")
+            exit(1)
         
-    # Get statistics
-    stats = tracker.get_emotion_statistics(time_window=10.0)
-    logger.info(f"Emotion statistics: {stats}")
-    
-    # Check for stress spike
-    if tracker.detect_stress_spike():
-        logger.warning("Stress spike detected!")
+        print("Tracking emotions for 30 seconds...")
+        start_time = time.time()
+        
+        while time.time() - start_time < 30:
+            ret, frame = camera.read()
+            if not ret:
+                continue
+            
+            # Detect emotion
+            emotion_data = tracker.detect_emotion(frame, enforce_detection=False)
+            
+            if emotion_data:
+                print(f"Emotion: {emotion_data['dominant_emotion']}, "
+                      f"Confidence: {emotion_data['confidence']:.2f}, "
+                      f"Valence: {emotion_data['valence']:.2f}, "
+                      f"Arousal: {emotion_data['arousal']:.2f}")
+                
+                # Check for emotion changes
+                change = tracker.detect_emotion_change()
+                if change:
+                    print(f"  -> Emotion changed from {change['previous_emotion']} "
+                          f"to {change['current_emotion']}")
+            
+            time.sleep(1)
+        
+        # Print statistics
+        stats = tracker.get_statistics()
+        print("\nStatistics:")
+        for key, value in stats.items():
+            print(f"  {key}: {value}")
+        
+        # Print trend analysis
+        trend = tracker.get_emotion_trend(duration=30.0)
+        print("\nTrend Analysis:")
+        for key, value in trend.items():
+            print(f"  {key}: {value}")
+        
+        camera.release()
+        
+    except KeyboardInterrupt:
+        print("\nStopping...")
+    except Exception as e:
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
 
 # Made with Bob
