@@ -1,279 +1,331 @@
-# SubMinds - Desktop Application
-**Subconscious Decision Analysis for F1 Drivers**
+# SubMinds — Subconscious Decision Analysis for F1 Drivers
 
-**Version:** 1.0.0 - Desktop Edition  
+**Version:** 1.0.0 — Desktop Edition  
 **Target Date:** May 2026  
-**Status:** Active Development
+**Status:** Active Development  
+**Primary App File:** `subminds_app.py`
 
-## 🎯 Project Overview
+---
 
-SubMinds is a desktop application that analyzes the subconscious decision-making patterns of F1 drivers using:
-- **Real-time facial expression analysis** via webcam
-- **IBM Granite AI** for deep pattern recognition and psychological insights
-- **Behavioral prediction models** for performance optimization
-- **Desktop GUI** built with Python Tkinter
+## What is SubMinds?
 
-## 🖥️ Desktop Application Features
+SubMinds is a Python desktop application that reads the **subconscious mind of F1 drivers in real time**. It combines live webcam facial analysis with IBM Granite AI to detect emotional states, stress patterns, and decision-making tendencies — all while the driver is behind the wheel.
 
-### Real-Time Analysis Dashboard
-- Live facial expression monitoring
-- Emotion tracking and stress level detection
-- AI-powered insights and recommendations
-- Performance statistics and metrics
+The app captures your face every 2 seconds, runs it through OpenCV-based expression detection, and sends the results to IBM Granite 13B for deep psychological insight generation. Everything runs locally on your machine with no complex deployment.
 
-### Easy Configuration
-- Simple GUI-based configuration
-- Environment variable support via .env file
-- No complex deployment needed
+---
 
-### Offline Capability
-- Works with or without IBM Granite AI
-- Mock mode for testing and development
-- Local data processing
+## The Problem SubMinds Solves
 
-## 📋 System Requirements
+### The Hidden Performance Gap in Motorsport
 
-- **Operating System:** Windows 10/11, macOS, or Linux
-- **Python:** 3.9 or higher
-- **Webcam:** For facial expression capture
-- **IBM Cloud Account:** (Optional) For AI-powered analysis
+Modern F1 teams have access to thousands of telemetry data points per second — throttle, brake, steering angle, tyre temperature, fuel load. Yet one critical variable remains almost entirely unmeasured:
 
-## 🚀 Quick Start Guide
+> **What is happening inside the driver's mind?**
 
-### 1. Install Python Dependencies
+This gap creates real, measurable problems:
+
+| Problem | Impact |
+|---|---|
+| **Invisible stress buildup** | Drivers accumulate cognitive load lap after lap with no objective measurement. By the time it shows in lap times, it's already too late. |
+| **Subconscious decision drift** | Under pressure, drivers make micro-decisions that deviate from their optimal style — aggressive braking, hesitation in corners — without being consciously aware of it. |
+| **No emotion-to-performance correlation** | Teams cannot connect emotional state data to lap time data because emotional state data simply doesn't exist in a structured form. |
+| **Post-session guesswork** | Debrief sessions rely on driver self-reporting, which is inherently unreliable. Drivers cannot accurately recall their mental state at Turn 7 on Lap 23. |
+| **One-size-fits-all coaching** | Mental coaching is generic because there is no per-driver, per-session emotional baseline to work from. |
+| **Stress spike blindness** | A sudden stress spike before a critical overtake attempt is invisible to the team. The driver may not even notice it consciously. |
+
+### What SubMinds Does About It
+
+SubMinds creates a **continuous, objective emotional telemetry stream** that runs alongside physical telemetry. It detects:
+
+- Real-time dominant emotion (focused, joyful, stressed, contemplative, distant, neutral)
+- Valence score (negative → positive emotional state, -1.0 to +1.0)
+- Arousal score (calm → highly activated, 0.0 to 1.0)
+- Stress level (0–10 scale, updated every 2 seconds)
+- Eye engagement and smile detection via Haar Cascade classifiers
+- Stress trend over time (increasing / stable / decreasing)
+- Decision pattern analysis (aggressive vs. hesitant driving tendencies)
+- Emotion-to-performance correlation (when enough data is collected)
+
+IBM Granite AI then synthesizes all of this into human-readable psychological insights, specific recommendations, and predictive indicators — delivered live to the desktop dashboard.
+
+---
+
+## How the App Works (Technical Overview)
+
+```
+Webcam Feed (OpenCV)
+       │
+       ▼
+ExpressionDetector (Haar Cascades)
+  - Face detection
+  - Eye detection
+  - Smile detection
+  - Emotion classification
+  - Valence / Arousal / Stress scoring
+       │
+       ▼
+GraniteAIClient (IBM Granite 13B)
+  - Multimodal prompt construction
+  - Subconscious pattern analysis
+  - JSON-structured insight generation
+  - Mock mode fallback (no credentials needed)
+       │
+       ▼
+SubMindsApp GUI (Tkinter + PIL)
+  - Live 640×480 camera feed with face annotations
+  - Real-time analysis output panel
+  - Status indicators (Camera / IBM Granite / Analysis)
+  - Statistics bar (analyses count, uptime, FPS)
+  - Snapshot and capture management
+```
+
+**Threading model:** The camera feed runs on its own thread at ~30 FPS. The analysis loop runs on a separate thread, firing every 2 seconds (configurable). The GUI thread stays responsive throughout.
+
+**Capture pipeline:** Every analysis cycle saves a timestamped `.jpg` to the `captures/` folder (`analysis_YYYYMMDD_HHMMSS_microseconds.jpg`), creating a full visual record of the session.
+
+---
+
+## Run the App
+
+The file that runs the application is:
 
 ```bash
-# Install required packages
+python subminds_app.py
+```
+
+This is the complete, production-ready desktop app with:
+- Live camera feed embedded in the GUI
+- Face detection annotations overlaid on the video
+- Full analysis output panel
+- Snapshot saving
+- Configuration dialog
+- Status indicators
+
+> `subminds_app_modern.py` is an alternative dark-theme UI variant. `subminds_desktop.py` is an older, simpler version. **Use `subminds_app.py` for the full experience.**
+
+---
+
+## Quick Start
+
+### 1. Install Dependencies
+
+```bash
 pip install -r requirements.txt
 ```
 
-### 2. Configure the Application
+Core packages installed: `opencv-python`, `Pillow`, `numpy`, `python-dotenv`, `pyyaml`, `requests`
 
-Copy the example environment file and add your credentials:
+### 2. Configure Credentials (Optional)
+
+IBM Granite AI is optional. The app runs in mock mode without it.
 
 ```bash
-# Copy the example file
 copy .env.example .env
-
-# Edit .env with your credentials
-# - IBM_CLOUD_API_KEY: Your IBM Cloud API key
-# - IBM_PROJECT_ID: Your IBM Watson Studio project ID
 ```
 
-**Get IBM Cloud Credentials:**
-1. Sign up at https://cloud.ibm.com/
-2. Create a Watson Studio project
-3. Get your API key from IBM Cloud dashboard
-4. Copy your project ID from Watson Studio
-
-### 3. Run the Application
+Edit `.env`:
 
 ```bash
-# Start the desktop application
-python subminds_desktop.py
-```
-
-## 📖 How to Use
-
-### Starting Analysis
-
-1. **Launch the Application**
-   - Run `python subminds_desktop.py`
-   - The main window will appear
-
-2. **Configure Settings** (First Time)
-   - Click "Configure" button
-   - Enter your IBM Cloud API Key
-   - Enter your IBM Project ID
-   - Set Camera ID (0 for default webcam)
-   - Click "Save"
-
-3. **Start Analysis**
-   - Click "Start Analysis" button
-   - Allow camera access when prompted
-   - Analysis will begin automatically
-
-4. **View Results**
-   - Real-time insights appear in the output panel
-   - Status indicators show system health
-   - Statistics update automatically
-
-### Controls
-
-- **Start/Stop Analysis:** Begin or pause the analysis
-- **Configure:** Open settings dialog
-- **Clear Output:** Clear the analysis output window
-- **Export Results:** Save analysis results to file
-
-### Status Indicators
-
-- 🟢 **Green:** Component working normally
-- 🟡 **Yellow:** Component in mock/fallback mode
-- 🔴 **Red:** Component not available
-
-## 🔧 Configuration Options
-
-### Environment Variables (.env file)
-
-```bash
-# IBM Cloud Credentials
 IBM_CLOUD_API_KEY=your_api_key_here
 IBM_PROJECT_ID=your_project_id_here
-
-# Camera Settings
-CAMERA_ID=0                    # 0 = default webcam
-
-# Analysis Settings
-ANALYSIS_INTERVAL=2.0          # Seconds between analyses
-LOG_LEVEL=INFO                 # Logging level
+CAMERA_ID=0
+ANALYSIS_INTERVAL=2.0
 ```
 
-### Camera Configuration
+Get IBM credentials at [cloud.ibm.com](https://cloud.ibm.com/) → Watson Studio → API Key.
 
-- **CAMERA_ID=0:** Default built-in webcam
-- **CAMERA_ID=1:** External USB webcam
-- **CAMERA_ID=2:** Second external camera
+### 3. Launch
 
-## 📁 Project Structure
+```bash
+python subminds_app.py
+```
+
+---
+
+## System Requirements
+
+| Requirement | Minimum |
+|---|---|
+| OS | Windows 10/11, macOS, Linux |
+| Python | 3.9 or higher |
+| Webcam | Any USB or built-in camera |
+| IBM Cloud | Optional (mock mode available) |
+
+---
+
+## Application Layout
+
+The GUI is split into two columns:
+
+**Left — Camera Panel**
+- Live webcam feed at 640×480
+- Green bounding box around detected face
+- Emotion label + confidence score overlaid
+- Timestamp and analysis count on frame
+- Controls: Start Analysis, Stop Analysis, Configure, Save Snapshot, Open Captures
+
+**Right — Analysis Panel**
+- System status indicators (Camera / IBM Granite / Analysis)
+- Scrollable analysis output with timestamped entries
+- Each entry shows: emotional state, stress analysis, decision patterns, AI recommendations, predictions, and the saved image filename
+
+**Bottom — Statistics Bar**
+- Total analyses performed
+- Session uptime
+- Camera FPS
+
+---
+
+## Configuration Options
+
+All settings live in `.env`:
+
+```bash
+IBM_CLOUD_API_KEY=         # IBM Cloud API key
+IBM_PROJECT_ID=            # Watson Studio project ID
+CAMERA_ID=0                # 0 = default webcam, 1 = external USB
+ANALYSIS_INTERVAL=2.0      # Seconds between AI analyses
+LOG_LEVEL=INFO
+```
+
+You can also change settings at runtime via the **Configure** button in the app.
+
+---
+
+## Project Structure
 
 ```
 subminds-may-2026/
-├── subminds_desktop.py          # Main desktop application
-├── requirements.txt             # Python dependencies
-├── .env.example                 # Example configuration
-├── .env                         # Your configuration (create this)
-├── README.md                    # This file
-├── setup.py                     # Package setup
-├── config/                      # Configuration files
+├── subminds_app.py              ← MAIN APP — run this
+├── subminds_app_modern.py       ← Dark theme UI variant
+├── subminds_desktop.py          ← Older simplified version
+├── requirements.txt
+├── .env.example
+├── .env                         ← Your credentials (create from .env.example)
+├── setup.py
+├── captures/                    ← Auto-saved analysis frames (JPG)
+├── config/
+│   ├── ibm_granite_config.yaml  ← Granite model parameters
 │   ├── camera_config.yaml
 │   ├── database_config.yaml
 │   └── torcs_config.yaml
-└── src/                         # Source code
-    ├── ai_engine/               # IBM Granite AI integration
-    │   ├── granite_client.py
-    │   └── pattern_recognition.py
-    ├── facial_analysis/         # Facial expression analysis
-    │   ├── capture.py
-    │   ├── emotion_tracker.py
-    │   └── expression_detector.py
-    └── utils/                   # Utility functions
+└── src/
+    ├── ai_engine/
+    │   ├── granite_client.py        ← IBM Granite 13B integration + mock mode
+    │   └── pattern_recognition.py  ← Stress, decision, micro-expression patterns
+    ├── facial_analysis/
+    │   ├── capture.py               ← OpenCV webcam capture
+    │   ├── expression_detector.py   ← Haar Cascade face/eye/smile detection
+    │   └── emotion_tracker.py       ← Emotion history, trends, averages
+    └── utils/
         ├── config_loader.py
         └── logger.py
 ```
 
-## 🎨 Features in Detail
+---
 
-### Facial Expression Analysis
-- Captures driver facial expressions via webcam
-- Detects emotions: focus, stress, confidence, anxiety
-- Tracks emotional state changes in real-time
-- Correlates expressions with performance
+## Understanding the Analysis Output
 
-### IBM Granite AI Integration
-- Advanced pattern recognition
-- Psychological insights generation
-- Performance predictions
-- Personalized recommendations
+Each analysis cycle produces a structured entry:
 
-### Desktop Interface
-- Clean, intuitive GUI
-- Real-time status monitoring
-- Easy configuration management
-- Export capabilities
+```
+============================================================
+[14:32:07] Analysis #12
+============================================================
+📷 Image: analysis_20260526_143207_482910.jpg
 
-## 🔒 Privacy & Security
+😊 Emotional State: Driver showing intensely_focused emotion with valence 0.40
+💪 Stress Analysis: Moderate stress levels detected. Monitor for changes.
 
-- All data processed locally on your machine
-- IBM Cloud credentials stored in .env file (never committed to git)
-- Webcam access only when analysis is running
-- No data sent to external servers (except IBM Granite API)
+🧠 Decision Patterns:
+   • Consistent decision-making at 178.3 km/h
+   • No hesitation patterns detected
 
-## 🐛 Troubleshooting
+💡 AI Recommendations:
+   ✓ Maintain current mental state
+   ✓ Focus on breathing exercises
+   ✓ Monitor stress triggers
 
-### Camera Not Working
-```bash
-# Check available cameras
-python -c "import cv2; print([i for i in range(10) if cv2.VideoCapture(i).isOpened()])"
+🔮 Predictions:
+   → Performance likely to remain stable
+   → Watch for stress spike in next 3 laps
 
-# Try different CAMERA_ID in .env file
-CAMERA_ID=1
+============================================================
 ```
 
-### IBM Granite Not Available
-- Application works in mock mode without IBM credentials
-- Check your API key and project ID
-- Verify internet connection
-- Check IBM Cloud service status
+### Emotion Classifications
 
-### Module Import Errors
-```bash
-# Reinstall dependencies
-pip install -r requirements.txt --force-reinstall
-```
-
-### Application Won't Start
-```bash
-# Check Python version
-python --version  # Should be 3.9 or higher
-
-# Check tkinter installation
-python -c "import tkinter"
-```
-
-## 📊 Understanding the Output
-
-### Analysis Results Format
-```
-[HH:MM:SS] Analysis Results:
-  Emotional State: Driver showing focused emotion with valence 0.30
-  Stress Analysis: Moderate stress levels detected. Monitor for changes.
-  Recommendations:
-    • Maintain current mental state
-    • Focus on breathing exercises
-    • Monitor stress triggers
-```
-
-### Statistics Panel
-- **Total Analyses:** Number of completed analyses
-- **Success Rate:** Percentage of successful analyses
-- **Avg Response Time:** Average time per analysis
-- **Uptime:** How long the system has been running
-
-## 🔄 Updates and Maintenance
-
-### Updating Dependencies
-```bash
-pip install -r requirements.txt --upgrade
-```
-
-### Backing Up Data
-- Export results regularly using "Export Results" button
-- Keep your .env file secure and backed up
-
-## 📞 Support
-
-For issues or questions:
-1. Check the Troubleshooting section above
-2. Review the .env.example file for configuration help
-3. Ensure all dependencies are installed correctly
-
-## 🎯 Roadmap
-
-- [x] Desktop GUI application
-- [x] IBM Granite AI integration
-- [x] Facial expression analysis
-- [ ] Art psychology analysis module
-- [ ] TORCS racing simulation integration
-- [ ] Advanced visualization dashboard
-- [ ] Multi-driver comparison
-- [ ] Historical data analysis
-
-## 📄 License
-
-[To be determined]
+| Emotion | Trigger Condition | Valence | Stress |
+|---|---|---|---|
+| `joyful` | Smile + both eyes detected | 0.8 | 2 |
+| `content` | Smile only | 0.6 | 3 |
+| `intensely_focused` | Both eyes + large face area | 0.4 | 7 |
+| `focused` | Both eyes detected | 0.3 | 6 |
+| `contemplative` | One eye detected | 0.2 | 5 |
+| `distant` | Small face area | -0.1 | 4 |
+| `neutral` | Face detected, no features | 0.0 | 5 |
 
 ---
 
-**SubMinds Desktop Edition** - Understanding the subconscious mind of champions 🏎️🧠
+## Troubleshooting
 
-*Made with Bob - Desktop Edition*
+### Camera not working
+```bash
+python -c "import cv2; print([i for i in range(5) if cv2.VideoCapture(i).isOpened()])"
+```
+Try setting `CAMERA_ID=1` in `.env` if camera 0 fails.
+
+### IBM Granite not connecting
+The app automatically falls back to mock mode. Check your API key and project ID in `.env`. Verify your IBM Cloud region matches the URL in `config/ibm_granite_config.yaml` (default: `eu-gb`).
+
+### Module import errors
+```bash
+pip install -r requirements.txt --force-reinstall
+```
+
+### App won't start
+```bash
+python --version        # Must be 3.9+
+python -c "import tkinter"
+python -c "import cv2"
+python -c "from PIL import Image"
+```
+
+### IBM Watson ML install issues (Python 3.12+)
+The `ibm-watson-machine-learning` package has known compatibility issues with Python 3.12+. The app runs fully in mock mode without it. If you need live Granite, use Python 3.11.
+
+---
+
+## Privacy & Security
+
+- All video processing happens locally on your machine
+- Frames are saved only to the local `captures/` folder
+- IBM credentials are stored in `.env` which is `.gitignore`d
+- The only external network call is to IBM Granite API (when configured)
+- Webcam is only accessed while analysis is running
+
+---
+
+## Roadmap
+
+- [x] Desktop GUI with live camera feed
+- [x] OpenCV facial expression detection
+- [x] IBM Granite AI integration with mock fallback
+- [x] Emotion history tracking and trend analysis
+- [x] Pattern recognition engine (stress, decision, micro-expression)
+- [ ] TORCS racing simulation integration (telemetry from real sim)
+- [ ] Art psychology analysis module
+- [ ] Historical session comparison dashboard
+- [ ] Multi-driver side-by-side analysis
+- [ ] Export to CSV / PDF report
+
+---
+
+## License
+
+To be determined.
+
+---
+
+**SubMinds Desktop Edition** — Understanding the subconscious mind of champions 🏎️🧠
