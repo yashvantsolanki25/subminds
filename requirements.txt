@@ -1,45 +1,25 @@
-# Core Dependencies
-numpy>=1.24.0,<2.0.0
+# SubMinds Desktop Application - Python Dependencies
+# Compatible with Python 3.14
+# Install with: pip install -r requirements.txt
+
+# Core Dependencies (REQUIRED)
+numpy>=2.0.0
 opencv-python>=4.8.0
 Pillow>=10.0.0
-
-# IBM Watson & AI (with compatible pandas version)
-ibm-watson-machine-learning>=1.0.327
-ibm-cloud-sdk-core>=3.16.0
-pandas>=1.5.0,<2.0.0
-requests>=2.31.0
-
-# Data Processing
-scipy>=1.11.0
-
-# Configuration & Utilities
 python-dotenv>=1.0.0
 pyyaml>=6.0.0
+requests>=2.31.0
 
-# Web Framework
-fastapi>=0.100.0
-uvicorn[standard]>=0.23.0
+# IBM Watson & AI (Optional - for full AI features)
+# Note: These may have dependency conflicts with Python 3.14
+# ibm-watson-machine-learning>=1.0.327
+# ibm-cloud-sdk-core>=3.21.0
 
-# Visualization
-plotly>=5.16.0
-matplotlib>=3.7.0
+# Installation Commands:
+# Basic (Required):
+#   pip install opencv-python pillow python-dotenv numpy pyyaml requests
+#
+# Full (with IBM Watson - may require Python 3.11 or earlier):
+#   pip install -r requirements.txt
 
-# Database drivers
-psycopg2-binary>=2.9.0
-pymongo>=4.5.0
-redis>=5.0.0
-
-# Computer Vision & Face Analysis
-mediapipe>=0.10.0
-deepface>=0.0.79
-tf-keras>=2.15.0
-
-# Testing & Quality
-pytest>=7.4.0
-pytest-cov>=4.1.0
-black>=23.7.0
-flake8>=6.1.0
-pylint>=3.0.0
-mypy>=1.4.1
-
-# Made with Bob
+# Made with Bob - Desktop Edition - Python 3.14 Compatible

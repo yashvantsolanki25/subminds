@@ -1,12 +1,12 @@
 """
 Facial analysis module for SubMinds
 """
-from .capture import FacialCaptureModule
+from .capture import FacialCapture
 from .expression_detector import ExpressionDetector
 from .emotion_tracker import EmotionTracker
 
 __all__ = [
-    'FacialCaptureModule',
+    'FacialCapture',
     'ExpressionDetector',
     'EmotionTracker'
 ]
