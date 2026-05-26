@@ -103,6 +103,9 @@ desktop.ini
 # Docker
 .dockerignore
 
+# Captures (auto-saved analysis frames - can be large)
+captures/
+
 # Video recordings (Large files)
 *.mp4
 *.avi

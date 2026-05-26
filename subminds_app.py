@@ -12,6 +12,7 @@ import time
 from datetime import datetime
 from typing import Optional, Dict, Any
 import json
+import csv
 
 # Try to import required modules
 try:
@@ -63,6 +64,9 @@ class SubMindsApp:
         self.start_time = None
         self.current_frame = None
         self.last_saved_image = None
+
+        # Session records for CSV export
+        self.session_records = []
         
         # Create captures directory
         self.captures_dir = os.path.join(os.path.dirname(__file__), 'captures')
@@ -103,97 +107,105 @@ class SubMindsApp:
         )
         title_label.grid(row=0, column=0, columnspan=2, pady=10)
         
-        # Left Column - Camera and Controls
+        # Left Column - Camera only
         left_frame = ttk.Frame(main_container)
         left_frame.grid(row=1, column=0, rowspan=2, sticky="nsew", padx=5)
         left_frame.columnconfigure(0, weight=1)
-        left_frame.rowconfigure(1, weight=1)
-        
+        left_frame.rowconfigure(0, weight=1)
+
         # Camera View
         camera_frame = ttk.LabelFrame(left_frame, text="Camera Feed", padding="10")
         camera_frame.grid(row=0, column=0, sticky="nsew", pady=5)
         camera_frame.columnconfigure(0, weight=1)
         camera_frame.rowconfigure(0, weight=1)
-        
+
         self.camera_label = ttk.Label(camera_frame, text="Camera not started", background="black", foreground="white")
         self.camera_label.grid(row=0, column=0, sticky="nsew")
-        
-        # Control Panel
-        control_frame = ttk.LabelFrame(left_frame, text="Controls", padding="10")
-        control_frame.grid(row=1, column=0, sticky="ew", pady=5)
-        
+
+        # Right Column - Controls → Status → Analysis Output
+        right_frame = ttk.Frame(main_container)
+        right_frame.grid(row=1, column=1, rowspan=2, sticky="nsew", padx=5)
+        right_frame.columnconfigure(0, weight=1)
+        right_frame.rowconfigure(2, weight=1)
+
+        # ── Row 0: Control Panel ──────────────────────────────────────
+        control_frame = ttk.LabelFrame(right_frame, text="Controls", padding="10")
+        control_frame.grid(row=0, column=0, sticky="ew", pady=5)
+
         self.start_button = ttk.Button(
             control_frame,
             text="Start Analysis",
             command=self.start_analysis,
-            width=20
+            width=18
         )
         self.start_button.grid(row=0, column=0, padx=5, pady=5)
-        
+
         self.stop_button = ttk.Button(
             control_frame,
             text="Stop Analysis",
             command=self.stop_analysis,
-            width=20,
+            width=18,
             state='disabled'
         )
         self.stop_button.grid(row=0, column=1, padx=5, pady=5)
-        
+
         config_button = ttk.Button(
             control_frame,
             text="Configure",
             command=self.show_config_dialog,
-            width=20
+            width=18
         )
         config_button.grid(row=0, column=2, padx=5, pady=5)
-        
+
         save_button = ttk.Button(
             control_frame,
             text="Save Snapshot",
             command=self.save_snapshot,
-            width=20
+            width=18
         )
         save_button.grid(row=1, column=0, padx=5, pady=5)
-        
+
         open_folder_button = ttk.Button(
             control_frame,
             text="Open Captures",
             command=self.open_captures_folder,
-            width=20
+            width=18
         )
         open_folder_button.grid(row=1, column=1, padx=5, pady=5)
-        
-        # Right Column - Analysis Output
-        right_frame = ttk.Frame(main_container)
-        right_frame.grid(row=1, column=1, rowspan=2, sticky="nsew", padx=5)
-        right_frame.columnconfigure(0, weight=1)
-        right_frame.rowconfigure(1, weight=1)
-        
-        # Status Panel
+
+        export_button = ttk.Button(
+            control_frame,
+            text="Export CSV",
+            command=self.export_csv,
+            width=18
+        )
+        export_button.grid(row=1, column=2, padx=5, pady=5)
+
+        # ── Row 1: Status Panel ───────────────────────────────────────
         status_frame = ttk.LabelFrame(right_frame, text="System Status", padding="10")
-        status_frame.grid(row=0, column=0, sticky="ew", pady=5)
-        
+        status_frame.grid(row=1, column=0, sticky="ew", pady=5)
+
         self.status_labels = {}
         labels = [
             ('Camera', 'camera_status'),
             ('IBM Granite', 'granite_status'),
             ('Analysis', 'analysis_status')
         ]
-        
+
         for idx, (label_text, key) in enumerate(labels):
             label = ttk.Label(status_frame, text=f"{label_text}:")
             label.grid(row=0, column=idx*2, padx=5, sticky="w")
-            
+
             status = ttk.Label(status_frame, text="●", foreground="red", font=('Arial', 12))
             status.grid(row=0, column=idx*2+1, padx=5, sticky="w")
             self.status_labels[key] = status
-        
-        # Analysis Output
+
+        # ── Row 2: Analysis Output ────────────────────────────────────
         output_frame = ttk.LabelFrame(right_frame, text="Analysis Output", padding="10")
-        output_frame.grid(row=1, column=0, sticky="nsew", pady=5)
+        output_frame.grid(row=2, column=0, sticky="nsew", pady=5)
         output_frame.columnconfigure(0, weight=1)
         output_frame.rowconfigure(0, weight=1)
-        
+
         self.output_text = scrolledtext.ScrolledText(
             output_frame,
             wrap=tk.WORD,
@@ -292,6 +304,7 @@ class SubMindsApp:
         self.is_running = True
         self.start_time = time.time()
         self.analysis_count = 0
+        self.session_records = []  # Reset records for new session
         self.start_button.config(state='disabled')
         self.stop_button.config(state='normal')
         self.update_status('analysis_status', 'green')
@@ -307,7 +320,7 @@ class SubMindsApp:
         self.analysis_thread.start()
         
     def stop_analysis(self):
-        """Stop the analysis process"""
+        """Stop the analysis process and prompt to export CSV"""
         self.is_running = False
         self.start_button.config(state='normal')
         self.stop_button.config(state='disabled')
@@ -316,6 +329,14 @@ class SubMindsApp:
         self.log_output("ANALYSIS STOPPED")
         self.log_output(f"Total analyses performed: {self.analysis_count}")
         self.log_output("="*60 + "\n")
+
+        # Auto-prompt CSV export if there is data
+        if self.session_records:
+            if messagebox.askyesno(
+                "Export Report",
+                f"Session complete — {self.analysis_count} analyses recorded.\n\nExport results as CSV?"
+            ):
+                self.export_csv()
     
     def save_snapshot(self):
         """Save current frame as snapshot"""
@@ -337,6 +358,58 @@ class SubMindsApp:
             os.startfile(self.captures_dir)
         else:
             messagebox.showinfo("Info", "No captures folder yet")
+
+    def export_csv(self):
+        """Export session analysis records to a CSV file chosen by the user"""
+        if not self.session_records:
+            messagebox.showwarning("No Data", "No analysis data to export yet.\nRun an analysis session first.")
+            return
+
+        # Ask user where to save
+        default_name = f"subminds_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        filepath = filedialog.asksaveasfilename(
+            title="Save Analysis Report",
+            initialfile=default_name,
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+
+        if not filepath:
+            return  # User cancelled
+
+        try:
+            fieldnames = [
+                'analysis_number',
+                'timestamp',
+                'image_file',
+                'dominant_emotion',
+                'confidence',
+                'valence',
+                'arousal',
+                'stress_level',
+                'face_detected',
+                'speed_kmh',
+                'steering',
+                'track_position',
+                'emotional_state',
+                'stress_analysis',
+                'decision_patterns',
+                'recommendations',
+                'predictions',
+            ]
+
+            with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                for record in self.session_records:
+                    writer.writerow(record)
+
+            self.log_output(f"✓ Report exported: {os.path.basename(filepath)}")
+            messagebox.showinfo("Export Successful", f"Report saved to:\n{filepath}")
+
+        except Exception as e:
+            messagebox.showerror("Export Failed", f"Could not save CSV:\n{e}")
+            self.log_output(f"✗ Export failed: {e}")
         
     def camera_loop(self):
         """Camera feed loop (runs in separate thread)"""
@@ -441,7 +514,7 @@ class SubMindsApp:
                         facial_data=facial_data,
                         telemetry=telemetry
                     )
-                    self.display_insights(insights, image_filename)
+                    self.display_insights(insights, image_filename, facial_data, telemetry)
                     self.analysis_count += 1
                     
                     # Update statistics
@@ -454,9 +527,33 @@ class SubMindsApp:
                 self.log_output(f"Analysis error: {e}")
                 time.sleep(1)
     
-    def display_insights(self, insights: Dict[str, Any], image_filename: str = None):
-        """Display analysis insights with image reference"""
+    def display_insights(self, insights: Dict[str, Any], image_filename: str = None,
+                         facial_data: Dict[str, Any] = None, telemetry: Dict[str, Any] = None):
+        """Display analysis insights and store record for CSV export"""
         timestamp = datetime.now().strftime("%H:%M:%S")
+        facial_data = facial_data or {}
+        telemetry = telemetry or {}
+
+        # ── Store record for CSV export ───────────────────────────────
+        self.session_records.append({
+            'analysis_number': self.analysis_count + 1,
+            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'image_file': image_filename or '',
+            'dominant_emotion': facial_data.get('dominant_emotion', ''),
+            'confidence': round(facial_data.get('confidence', 0.0), 3),
+            'valence': round(facial_data.get('valence', 0.0), 3),
+            'arousal': round(facial_data.get('arousal', 0.0), 3),
+            'stress_level': facial_data.get('stress_level', ''),
+            'face_detected': facial_data.get('face_detected', False),
+            'speed_kmh': round(telemetry.get('speed', 0.0), 1),
+            'steering': round(telemetry.get('steering', 0.0), 3),
+            'track_position': round(telemetry.get('track_position', 0.0), 3),
+            'emotional_state': insights.get('emotional_state', ''),
+            'stress_analysis': insights.get('stress_analysis', ''),
+            'decision_patterns': ' | '.join(insights.get('decision_patterns', [])),
+            'recommendations': ' | '.join(insights.get('recommendations', [])),
+            'predictions': ' | '.join(insights.get('predictions', [])),
+        })
         
         output = f"\n{'='*60}\n"
         output += f"[{timestamp}] Analysis #{self.analysis_count + 1}\n"
