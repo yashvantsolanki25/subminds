@@ -1,12 +1,13 @@
 """
-AI Client for pattern analysis — powered by Meta Llama 4 Maverick via IBM WatsonX
-Production-ready implementation with comprehensive error handling
+Dual AI Client — SubMindsAI custom deployment + Llama 4 Maverick (parallel)
+Deep image analysis with emoji emotion mapping
 """
 import os
 import re
 import time
 import logging
-from typing import Dict, Any, List, Optional
+import threading
+from typing import Dict, Any, List, Optional, Tuple
 from pathlib import Path
 import json
 
@@ -23,770 +24,529 @@ try:
     YAML_AVAILABLE = True
 except ImportError:
     YAML_AVAILABLE = False
-    logging.warning("PyYAML not available")
 
 try:
     from dotenv import load_dotenv
-    DOTENV_AVAILABLE = True
     load_dotenv()
 except ImportError:
-    DOTENV_AVAILABLE = False
-    logging.warning("python-dotenv not available")
+    pass
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ── Emotion → Emoji mapping ───────────────────────────────────────────────────
+EMOTION_EMOJI = {
+    "joyful":            "😄",
+    "happy":             "😊",
+    "content":           "🙂",
+    "excited":           "🤩",
+    "confident":         "😎",
+    "focused":           "🧐",
+    "intensely_focused": "🔥",
+    "contemplative":     "🤔",
+    "neutral":           "😐",
+    "calm":              "😌",
+    "tired":             "😴",
+    "distant":           "😶",
+    "anxious":           "😰",
+    "stressed":          "😤",
+    "fearful":           "😨",
+    "angry":             "😠",
+    "sad":               "😢",
+    "surprised":         "😲",
+    "disgusted":         "🤢",
+    "no_face":           "🚫",
+    "unknown":           "❓",
+    "error":             "⚠️",
+}
+
+# Deployment ID for the custom SubMindsAI prompt-template deployment
+SUBMINDS_DEPLOYMENT_ID = "019e77db-031e-722c-aa9d-2ed020542403"
+LLAMA_MODEL_ID         = "meta-llama/llama-4-maverick-17b-128e-instruct-fp8"
+
+
+def get_emotion_emoji(emotion: str) -> str:
+    """Return emoji for a given emotion string."""
+    key = emotion.lower().replace(" ", "_")
+    return EMOTION_EMOJI.get(key, EMOTION_EMOJI.get(key.split("_")[0], "🧠"))
+
+
+def extract_image_features(image_path: str) -> Dict[str, Any]:
+    """
+    Run deep OpenCV feature extraction on an image.
+    Returns a rich feature dict used as input to both AI models.
+    """
+    features = {
+        "file": Path(image_path).name,
+        "face_count": 0,
+        "eye_count": 0,
+        "smile_detected": False,
+        "mean_brightness": 0.0,
+        "brightness_std": 0.0,
+        "width": 0,
+        "height": 0,
+        "face_size_ratio": 0.0,
+        "dominant_region": "unknown",
+        "edge_density": 0.0,
+    }
+    try:
+        import cv2
+        import numpy as np
+
+        frame = cv2.imread(str(image_path))
+        if frame is None:
+            return features
+
+        h, w = frame.shape[:2]
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        features["width"] = w
+        features["height"] = h
+        features["mean_brightness"] = float(np.mean(gray))
+        features["brightness_std"] = float(np.std(gray))
+
+        # Edge density (Canny) — indicates tension/activity in the frame
+        edges = cv2.Canny(gray, 50, 150)
+        features["edge_density"] = float(np.sum(edges > 0) / (h * w))
+
+        # Face detection
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        faces = face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(30, 30))
+        features["face_count"] = len(faces)
+
+        if len(faces) > 0:
+            # Use the largest face
+            x, y, fw, fh = max(faces, key=lambda f: f[2] * f[3])
+            features["face_size_ratio"] = round((fw * fh) / (w * h), 4)
+
+            face_roi = gray[y:y+fh, x:x+fw]
+
+            eye_cascade   = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_eye.xml")
+            smile_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_smile.xml")
+
+            eyes   = eye_cascade.detectMultiScale(face_roi, 1.1, 5)
+            smiles = smile_cascade.detectMultiScale(face_roi, 1.8, 20, minSize=(25, 25))
+
+            features["eye_count"]      = len(eyes)
+            features["smile_detected"] = len(smiles) > 0
+
+            # Dominant image region (upper/lower/left/right brightness split)
+            top_half    = float(np.mean(gray[:h//2, :]))
+            bottom_half = float(np.mean(gray[h//2:, :]))
+            features["dominant_region"] = "upper" if top_half > bottom_half else "lower"
+
+    except Exception as e:
+        logger.warning(f"OpenCV feature extraction failed: {e}")
+
+    return features
+
+
+def features_to_description(f: Dict[str, Any]) -> str:
+    """Convert feature dict to a rich natural-language description for the LLM."""
+    smile  = "yes" if f["smile_detected"] else "no"
+    bright = "bright" if f["mean_brightness"] > 160 else ("dark" if f["mean_brightness"] < 80 else "moderate")
+    tension = "high" if f["edge_density"] > 0.15 else ("moderate" if f["edge_density"] > 0.07 else "low")
+    return (
+        f"Image: {f['file']} ({f['width']}x{f['height']}px). "
+        f"Lighting: {bright} (mean={f['mean_brightness']:.1f}, std={f['brightness_std']:.1f}). "
+        f"Faces detected: {f['face_count']}. Eyes visible: {f['eye_count']}. "
+        f"Smile: {smile}. Face-to-frame ratio: {f['face_size_ratio']:.3f}. "
+        f"Visual tension/activity level: {tension} (edge density={f['edge_density']:.3f}). "
+        f"Dominant image region: {f['dominant_region']}."
+    )
+
 
 class GraniteAIClient:
-    """AI client powered by Meta Llama 4 Maverick via IBM WatsonX"""
-    
+    """
+    Dual AI client:
+      • SubMindsAI  — your custom WatsonX deployment (prompt-template tuned)
+      • Llama 4 Maverick — raw foundation model for deep independent analysis
+    Both run in parallel threads; results are merged and returned together.
+    """
+
     def __init__(
         self,
         config_path: Optional[str] = None,
         api_key: Optional[str] = None,
         project_id: Optional[str] = None,
         space_id: Optional[str] = None,
-        url: str = "https://us-south.ml.cloud.ibm.com"
+        url: str = "https://us-south.ml.cloud.ibm.com",
     ):
-        """
-        Initialize Granite AI client
-        
-        Args:
-            config_path: Path to configuration file (YAML)
-            api_key: IBM Cloud API key (overrides config file)
-            project_id: IBM Watson Studio project ID (overrides config file)
-            space_id: IBM Watson Machine Learning space ID (overrides config file)
-            url: IBM Watson Machine Learning URL
-        """
-        self.config_path = config_path
-        self.url = url
-        self.model: Optional[Any] = None
-        self.api_key: Optional[str] = None
-        self.project_id: Optional[str] = None
-        self.space_id: Optional[str] = None
-        
-        # Load configuration
+        self.url        = url
+        self.api_key    = api_key or os.getenv("IBM_CLOUD_API_KEY")
+        self.project_id = project_id or os.getenv("IBM_PROJECT_ID")
+        self.space_id   = space_id or os.getenv("IBM_SPACE_ID")
+
+        # Sanitise placeholder values
+        for attr in ("project_id", "space_id"):
+            v = getattr(self, attr)
+            if isinstance(v, str):
+                v = v.strip()
+                if not v or (v.startswith("${") and v.endswith("}")):
+                    setattr(self, attr, None)
+
+        # Load YAML config
         if config_path and Path(config_path).exists():
             self.config = self._load_config(config_path)
         else:
-            self.config = self._get_default_config()
-        
-        # Override with direct parameters
-        if api_key:
-            self.api_key = api_key
-        if project_id:
-            self.project_id = project_id
-        if space_id:
-            self.space_id = space_id
-        
-        # Override with config file values if not provided directly
-        if not self.api_key:
-            self.api_key = self.config.get('api_key')
-        if not self.project_id:
-            self.project_id = self.config.get('project_id')
-        if not self.space_id:
-            self.space_id = self.config.get('space_id')
-        self.url = self.config.get('url', self.url)
-        
-        # Get from environment if still not set
-        if not self.api_key:
-            self.api_key = os.getenv('IBM_CLOUD_API_KEY')
-        if not self.project_id:
-            self.project_id = os.getenv('IBM_PROJECT_ID')
-        if not self.space_id:
-            self.space_id = os.getenv('IBM_SPACE_ID')
+            self.config = self._default_config()
 
-        for attr in ['project_id', 'space_id']:
-            value = getattr(self, attr)
-            if isinstance(value, str):
-                value = value.strip()
-                if not value or (value.startswith('${') and value.endswith('}')):
-                    setattr(self, attr, None)
-                else:
-                    setattr(self, attr, value)
-        
-        # Initialize model if credentials available
+        self.url = self.config.get("url", self.url)
+
+        # Two separate model handles
+        self.subminds_model: Optional[Any] = None   # custom deployment
+        self.llama_model:    Optional[Any] = None   # direct foundation model
+
         if IBM_WML_AVAILABLE and self.api_key and (self.project_id or self.space_id):
-            try:
-                self.model = self._initialize_model()
-                logger.info("IBM Granite client initialized successfully")
-            except Exception as e:
-                logger.error(f"Failed to initialize Granite model: {e}")
-                self.model = None
+            self._init_models()
         else:
-            logger.warning("IBM Granite not available. Using mock mode.")
-            self.model = None
-        
-        # Request tracking
+            logger.warning("WatsonX credentials missing — running in mock mode.")
+
+        # Stats
         self.request_count = 0
-        self.error_count = 0
-        self.total_tokens = 0
-        
-    def _load_config(self, config_path: str) -> Dict[str, Any]:
-        """
-        Load configuration from YAML file
-        
-        Args:
-            config_path: Path to YAML configuration file
-            
-        Returns:
-            Configuration dictionary
-        """
+        self.error_count   = 0
+        self.total_tokens  = 0
+
+    # ── Config helpers ────────────────────────────────────────────────────────
+
+    def _load_config(self, path: str) -> Dict[str, Any]:
         try:
             if not YAML_AVAILABLE:
-                logger.warning("PyYAML not available, using default config")
-                return self._get_default_config()
-            
-            with open(config_path, 'r') as f:
-                config = yaml.safe_load(f)
-            
-            # Extract IBM Granite config
-            if 'ibm_granite' in config:
-                config = config['ibm_granite']
-            
-            config = self._resolve_env_variables(config)
-            logger.info(f"Configuration loaded from {config_path}")
-            return config
-            
+                return self._default_config()
+            with open(path, "r") as f:
+                cfg = yaml.safe_load(f)
+            if "ibm_granite" in cfg:
+                cfg = cfg["ibm_granite"]
+            return self._resolve_env(cfg)
         except Exception as e:
-            logger.error(f"Error loading config: {e}")
-            return self._get_default_config()
+            logger.error(f"Config load error: {e}")
+            return self._default_config()
 
-    def _resolve_env_variables(self, config: Any) -> Any:
-        """
-        Resolve environment variable placeholders in configuration values.
+    def _resolve_env(self, obj: Any) -> Any:
+        if isinstance(obj, dict):
+            return {k: self._resolve_env(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [self._resolve_env(v) for v in obj]
+        if isinstance(obj, str):
+            resolved = re.sub(r"\$\{([^}]+)\}", lambda m: os.getenv(m.group(1), ""), obj)
+            return resolved or None
+        return obj
 
-        Args:
-            config: Configuration data loaded from YAML
-
-        Returns:
-            Configuration with ${VAR} values replaced by environment variables
-        """
-        if isinstance(config, dict):
-            return {k: self._resolve_env_variables(v) for k, v in config.items()}
-        if isinstance(config, list):
-            return [self._resolve_env_variables(v) for v in config]
-        if isinstance(config, str):
-            def repl(match):
-                env_var = match.group(1)
-                return os.getenv(env_var, '')
-
-            resolved = re.sub(r"\$\{([^}]+)\}", repl, config)
-            return resolved if resolved else None
-        return config
-    
-    def _get_default_config(self) -> Dict[str, Any]:
-        """
-        Get default configuration
-        
-        Returns:
-            Default configuration dictionary
-        """
+    def _default_config(self) -> Dict[str, Any]:
         return {
-            'url': self.url,
-            'model': {
-                'id': 'meta-llama/llama-4-maverick-17b-128e-instruct-fp8',
-                'version': 'latest'
-            },
-            'parameters': {
-                'max_tokens': 2000,
-                'temperature': 0.7,
-                'top_p': 0.9,
-                'top_k': 50,
-                'repetition_penalty': 1.1
-            },
-            'rate_limits': {
-                'requests_per_minute': 60,
-                'tokens_per_minute': 100000,
-                'retry_attempts': 3,
-                'retry_delay': 2
-            },
-            'space_id': None
+            "url": self.url,
+            "model": {"id": LLAMA_MODEL_ID},
+            "parameters": {"max_tokens": 2000, "temperature": 0.7, "top_p": 0.9},
+            "rate_limits": {"retry_attempts": 3, "retry_delay": 2},
         }
-    
-    def _initialize_model(self) -> Any:
-        """
-        Initialize Llama 4 Maverick model via IBM WatsonX ModelInference
-        
-        Returns:
-            Initialized ModelInference instance
-        """
-        if not IBM_WML_AVAILABLE:
-            raise RuntimeError("ibm-watsonx-ai not available — run: pip install ibm-watsonx-ai")
-        
-        if not self.api_key or not (self.project_id or self.space_id):
-            raise ValueError("API key plus either project_id or space_id are required")
-        
-        credentials = Credentials(
-            url=self.config.get('url', self.url),
-            api_key=self.api_key
-        )
-        
-        model_id = self.config.get('model', {}).get('id', 'meta-llama/llama-4-maverick-17b-128e-instruct-fp8')
-        
+
+    # ── Model initialisation ──────────────────────────────────────────────────
+
+    def _init_models(self):
+        creds = Credentials(url=self.url, api_key=self.api_key)
         params = {
-            "max_new_tokens": self.config.get('parameters', {}).get('max_tokens', 2000),
-            "temperature": self.config.get('parameters', {}).get('temperature', 0.7),
-            "top_p": self.config.get('parameters', {}).get('top_p', 0.9),
+            "max_new_tokens": self.config["parameters"].get("max_tokens", 2000),
+            "temperature":    self.config["parameters"].get("temperature", 0.7),
+            "top_p":          self.config["parameters"].get("top_p", 0.9),
         }
+        scope = {"space_id": self.space_id} if self.space_id else {"project_id": self.project_id}
 
-        last_exception = None
-        if self.project_id:
-            try:
-                model = ModelInference(
-                    model_id=model_id,
-                    credentials=credentials,
-                    project_id=self.project_id,
-                    params=params
-                )
-                return model
-            except Exception as e:
-                last_exception = e
-                logger.warning(f"Project ID initialization failed: {e}")
-                if self.space_id is None:
-                    raise
-                logger.info("Retrying with space_id because project_id initialization failed")
-
-        if self.space_id:
-            model = ModelInference(
-                model_id=model_id,
-                credentials=credentials,
-                space_id=self.space_id,
-                params=params
+        # 1. SubMindsAI custom deployment
+        try:
+            self.subminds_model = ModelInference(
+                deployment_id=SUBMINDS_DEPLOYMENT_ID,
+                credentials=creds,
+                params=params,
+                **scope,
             )
-            return model
+            logger.info("SubMindsAI custom deployment initialised ✓")
+        except Exception as e:
+            logger.error(f"SubMindsAI deployment init failed: {e}")
 
-        raise last_exception or RuntimeError("Unable to initialize model")
-    
+        # 2. Llama 4 Maverick direct
+        try:
+            self.llama_model = ModelInference(
+                model_id=LLAMA_MODEL_ID,
+                credentials=creds,
+                params=params,
+                **scope,
+            )
+            logger.info("Llama 4 Maverick model initialised ✓")
+        except Exception as e:
+            logger.error(f"Llama 4 Maverick init failed: {e}")
+
+    def is_available(self) -> bool:
+        return self.subminds_model is not None or self.llama_model is not None
+
+    # ── Parallel generation ───────────────────────────────────────────────────
+
+    def _call_model(self, model, prompt: str, label: str) -> Tuple[str, str]:
+        """Call a single model and return (label, response_text)."""
+        retries    = self.config["rate_limits"].get("retry_attempts", 3)
+        retry_delay = self.config["rate_limits"].get("retry_delay", 2)
+        for attempt in range(retries):
+            try:
+                resp = model.generate_text(prompt=prompt)
+                return label, resp
+            except Exception as e:
+                logger.warning(f"[{label}] attempt {attempt+1} failed: {e}")
+                if attempt < retries - 1:
+                    time.sleep(retry_delay * (attempt + 1))
+        return label, ""
+
+    def _parallel_generate(self, prompt: str) -> Dict[str, str]:
+        """
+        Fire both models simultaneously in threads.
+        Returns {"subminds": "...", "llama": "..."}.
+        """
+        results: Dict[str, str] = {}
+
+        def run(model, label):
+            if model:
+                _, text = self._call_model(model, prompt, label)
+                results[label] = text
+            else:
+                results[label] = ""
+
+        t1 = threading.Thread(target=run, args=(self.subminds_model, "subminds"), daemon=True)
+        t2 = threading.Thread(target=run, args=(self.llama_model,    "llama"),    daemon=True)
+        t1.start(); t2.start()
+        t1.join();  t2.join()
+        return results
+
+    # ── Deep image analysis ───────────────────────────────────────────────────
+
+    def analyze_image(
+        self,
+        image_path: str,
+        analysis_type: str = "facial_expression",
+        additional_context: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Deep image analysis using both models in parallel.
+        OpenCV extracts rich features; both LLMs interpret them independently.
+        """
+        try:
+            features    = extract_image_features(image_path)
+            description = features_to_description(features)
+
+            ctx = f"\nAdditional context: {additional_context}" if additional_context else ""
+
+            prompt = f"""You are an expert sports psychologist and neuroscientist specialising in F1 driver performance.
+
+DEEP IMAGE ANALYSIS DATA:
+{description}{ctx}
+
+Perform a thorough psychological analysis covering:
+1. PRIMARY EMOTION — identify the single dominant emotion with intensity (0.0–1.0)
+2. SECONDARY EMOTIONS — up to 3 additional emotions present with intensities
+3. MICRO-EXPRESSION SIGNALS — subtle facial cues and what they reveal subconsciously
+4. STRESS & AROUSAL LEVEL — rate 1–10 and explain physiological indicators
+5. COGNITIVE STATE — focus, decision-readiness, mental fatigue assessment
+6. SUBCONSCIOUS DRIVERS — hidden motivations or anxieties visible in the expression
+7. PERFORMANCE IMPACT — how this emotional state affects racing performance RIGHT NOW
+8. ACTIONABLE RECOMMENDATIONS — 3 specific mental coaching interventions
+
+Respond ONLY with valid JSON using these exact keys:
+{{
+  "primary_emotion": {{"name": "...", "intensity": 0.0}},
+  "secondary_emotions": [{{"name": "...", "intensity": 0.0}}],
+  "micro_expressions": ["..."],
+  "stress_level": 0,
+  "arousal_level": 0,
+  "cognitive_state": "...",
+  "subconscious_drivers": ["..."],
+  "performance_impact": "...",
+  "recommendations": ["...", "...", "..."]
+}}"""
+
+            if self.subminds_model or self.llama_model:
+                raw = self._parallel_generate(prompt)
+            else:
+                raw = {"subminds": self._mock_image_response(), "llama": self._mock_image_response()}
+
+            subminds_parsed = self._parse_json(raw.get("subminds", ""))
+            llama_parsed    = self._parse_json(raw.get("llama", ""))
+
+            # Merge: llama is primary, subminds fills gaps
+            merged = {**subminds_parsed, **{k: v for k, v in llama_parsed.items() if v}}
+
+            # Attach emoji to primary emotion
+            primary_name = merged.get("primary_emotion", {})
+            if isinstance(primary_name, dict):
+                ename = primary_name.get("name", "unknown")
+            else:
+                ename = str(primary_name)
+            merged["emotion_emoji"] = get_emotion_emoji(ename)
+
+            self.request_count += 1
+            return {
+                "timestamp":        time.time(),
+                "image_path":       str(image_path),
+                "image_features":   features,
+                "subminds_raw":     raw.get("subminds", ""),
+                "llama_raw":        raw.get("llama", ""),
+                "subminds_result":  subminds_parsed,
+                "llama_result":     llama_parsed,
+                "merged":           merged,
+            }
+
+        except Exception as e:
+            logger.error(f"analyze_image error: {e}")
+            self.error_count += 1
+            return self._error_response(str(e))
+
+    # ── Subconscious pattern analysis ────────────────────────────────────────
+
     def analyze_subconscious_patterns(
         self,
         facial_data: Dict[str, Any],
         telemetry: Dict[str, Any],
         art_analysis: Optional[Dict[str, Any]] = None,
-        context: Optional[str] = None
+        context: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """
-        Analyze subconscious patterns using multimodal data
-        
-        Args:
-            facial_data: Facial expression analysis results
-            telemetry: Racing telemetry data
-            art_analysis: Optional art psychology analysis
-            context: Optional additional context
-            
-        Returns:
-            Dictionary containing insights and recommendations
-        """
+        """Run dual-model subconscious pattern analysis and return merged insights."""
         try:
-            # Create analysis prompt
-            prompt = self._create_analysis_prompt(
-                facial_data,
-                telemetry,
-                art_analysis,
-                context
-            )
-            
-            # Generate insights
-            if self.model:
-                response = self._generate_with_retry(prompt)
+            prompt = self._build_pattern_prompt(facial_data, telemetry, art_analysis, context)
+
+            if self.subminds_model or self.llama_model:
+                raw = self._parallel_generate(prompt)
             else:
-                response = self._get_mock_response(facial_data, telemetry)
-            
-            # Parse response
-            insights = self._parse_response(response, facial_data, telemetry)
-            
-            # Update statistics
-            self.request_count += 1
-            
-            return insights
-            
-        except Exception as e:
-            logger.error(f"Error analyzing patterns: {e}")
-            self.error_count += 1
-            return self._get_error_response(str(e))
-    
-    def _create_analysis_prompt(
-        self,
-        facial_data: Dict[str, Any],
-        telemetry: Dict[str, Any],
-        art_analysis: Optional[Dict[str, Any]],
-        context: Optional[str]
-    ) -> str:
-        """
-        Create analysis prompt for Granite
-        
-        Args:
-            facial_data: Facial expression data
-            telemetry: Racing telemetry
-            art_analysis: Optional art analysis
-            context: Optional context
-            
-        Returns:
-            Formatted prompt string
-        """
-        prompt = """You are an expert sports psychologist analyzing F1 driver performance.
-
-FACIAL EXPRESSION DATA:
-"""
-        
-        # Add facial data
-        if facial_data:
-            prompt += f"- Dominant emotion: {facial_data.get('dominant_emotion', 'unknown')}\n"
-            prompt += f"- Confidence: {facial_data.get('confidence', 0):.2f}\n"
-            prompt += f"- Valence (negative to positive): {facial_data.get('valence', 0):.2f}\n"
-            prompt += f"- Arousal (calm to excited): {facial_data.get('arousal', 0):.2f}\n"
-        
-        # Add telemetry data
-        prompt += "\nRACING TELEMETRY:\n"
-        if telemetry:
-            prompt += f"- Speed: {telemetry.get('speed', 0):.1f} km/h\n"
-            prompt += f"- Steering angle: {telemetry.get('steering', 0):.3f}\n"
-            prompt += f"- Track position: {telemetry.get('track_position', 0):.3f}\n"
-            if 'lap_time' in telemetry:
-                prompt += f"- Lap time: {telemetry.get('lap_time', 0):.2f}s\n"
-        
-        # Add art analysis if available
-        if art_analysis:
-            prompt += "\nART PSYCHOLOGY ANALYSIS:\n"
-            prompt += f"- Dominant colors: {art_analysis.get('dominant_colors', [])}\n"
-            prompt += f"- Composition style: {art_analysis.get('composition_style', 'unknown')}\n"
-            prompt += f"- Psychological themes: {art_analysis.get('themes', [])}\n"
-        
-        # Add context if provided
-        if context:
-            prompt += f"\nADDITIONAL CONTEXT:\n{context}\n"
-        
-        # Add analysis request
-        prompt += """
-Based on this multimodal data, provide:
-1. Current subconscious emotional state and its impact on performance
-2. Identified stress triggers and coping mechanisms
-3. Decision-making patterns (conscious vs subconscious)
-4. Specific recommendations for mental state optimization
-5. Predictive indicators for performance changes
-
-Format your response as structured JSON with keys: emotional_state, stress_analysis, decision_patterns, recommendations, predictions.
-"""
-        
-        return prompt
-    
-    def _generate_with_retry(
-        self,
-        prompt: str,
-        max_retries: Optional[int] = None
-    ) -> str:
-        """
-        Generate text with retry logic
-        
-        Args:
-            prompt: Input prompt
-            max_retries: Maximum retry attempts
-            
-        Returns:
-            Generated text
-        """
-        if not self.model:
-            raise RuntimeError("Model not initialized")
-        
-        retries = max_retries if max_retries is not None else self.config.get('rate_limits', {}).get('retry_attempts', 3)
-        retry_delay = self.config.get('rate_limits', {}).get('retry_delay', 2)
-        
-        for attempt in range(retries):
-            try:
-                response = self.model.generate_text(prompt=prompt)
-                return response
-                
-            except Exception as e:
-                logger.warning(f"Generation attempt {attempt + 1} failed: {e}")
-                if attempt < retries - 1:
-                    time.sleep(retry_delay * (attempt + 1))
-                else:
-                    raise
-        
-        raise RuntimeError("Max retries exceeded")
-    
-    def _parse_response(
-        self,
-        response: str,
-        facial_data: Dict[str, Any],
-        telemetry: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Parse Granite response into structured insights
-        
-        Args:
-            response: Raw response from Granite
-            facial_data: Original facial data
-            telemetry: Original telemetry data
-            
-        Returns:
-            Structured insights dictionary
-        """
-        try:
-            # Try to parse as JSON
-            if '{' in response and '}' in response:
-                start = response.index('{')
-                end = response.rindex('}') + 1
-                json_str = response[start:end]
-                parsed = json.loads(json_str)
-                
-                return {
-                    'timestamp': time.time(),
-                    'emotional_state': parsed.get('emotional_state', 'Unknown'),
-                    'stress_analysis': parsed.get('stress_analysis', 'No analysis available'),
-                    'decision_patterns': parsed.get('decision_patterns', []),
-                    'recommendations': parsed.get('recommendations', []),
-                    'predictions': parsed.get('predictions', []),
-                    'raw_response': response,
-                    'input_data': {
-                        'facial': facial_data,
-                        'telemetry': telemetry
-                    }
+                raw = {
+                    "subminds": self._mock_pattern_response(facial_data, telemetry),
+                    "llama":    self._mock_pattern_response(facial_data, telemetry),
                 }
-        except Exception as e:
-            logger.warning(f"Could not parse JSON response: {e}")
-        
-        # Fallback to text parsing
-        return {
-            'timestamp': time.time(),
-            'emotional_state': facial_data.get('dominant_emotion', 'unknown'),
-            'stress_analysis': f"Stress level: {facial_data.get('stress_level', 'unknown')}",
-            'decision_patterns': ['Pattern analysis in progress'],
-            'recommendations': ['Continue monitoring'],
-            'predictions': ['Insufficient data for predictions'],
-            'raw_response': response,
-            'input_data': {
-                'facial': facial_data,
-                'telemetry': telemetry
-            }
-        }
-    
-    def _get_mock_response(
-        self,
-        facial_data: Dict[str, Any],
-        telemetry: Dict[str, Any]
-    ) -> str:
-        """
-        Get mock response when Granite is not available
-        
-        Args:
-            facial_data: Facial expression data
-            telemetry: Racing telemetry
-            
-        Returns:
-            Mock response string
-        """
-        emotion = facial_data.get('dominant_emotion', 'neutral')
-        valence = facial_data.get('valence', 0.0)
-        speed = telemetry.get('speed', 0)
-        
-        return f"""{{
-    "emotional_state": "Driver showing {emotion} emotion with valence {valence:.2f}",
-    "stress_analysis": "Moderate stress levels detected. Monitor for changes.",
-    "decision_patterns": ["Consistent decision-making at {speed:.1f} km/h"],
-    "recommendations": ["Maintain current mental state", "Focus on breathing exercises"],
-    "predictions": ["Performance likely to remain stable"]
-}}"""
-    
-    def _get_error_response(self, error_msg: str) -> Dict[str, Any]:
-        """
-        Get error response
-        
-        Args:
-            error_msg: Error message
-            
-        Returns:
-            Error response dictionary
-        """
-        return {
-            'timestamp': time.time(),
-            'error': True,
-            'error_message': error_msg,
-            'emotional_state': 'Error',
-            'stress_analysis': 'Analysis failed',
-            'decision_patterns': [],
-            'recommendations': ['Retry analysis'],
-            'predictions': []
-        }
-    
-    def analyze_image(
-        self,
-        image_path: str,
-        analysis_type: str = "facial_expression",
-        additional_context: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        Analyze an image using the AI model.
-        
-        Since the WatsonX text model does not accept raw image bytes, this method
-        runs OpenCV-based feature extraction locally and then sends a structured
-        text description to the LLM for deeper psychological interpretation.
-        
-        Args:
-            image_path: Path to the image file
-            analysis_type: Type of analysis (facial_expression, general, subconscious)
-            additional_context: Additional context for the analysis
-            
-        Returns:
-            Dictionary containing AI analysis results
-        """
-        try:
-            from pathlib import Path as _Path
 
-            image_file = _Path(image_path)
-            if not image_file.exists():
-                raise FileNotFoundError(f"Image file not found: {image_path}")
+            subminds_parsed = self._parse_json(raw.get("subminds", ""))
+            llama_parsed    = self._parse_json(raw.get("llama", ""))
+            merged          = {**subminds_parsed, **{k: v for k, v in llama_parsed.items() if v}}
 
-            # ── Local feature extraction via OpenCV ───────────────────
-            image_description = f"Image file: {image_file.name}"
-            try:
-                import cv2 as _cv2
-                import numpy as _np
-
-                frame = _cv2.imread(str(image_path))
-                if frame is not None:
-                    gray = _cv2.cvtColor(frame, _cv2.COLOR_BGR2GRAY)
-                    h, w = gray.shape
-                    mean_brightness = float(_np.mean(gray))
-                    std_brightness = float(_np.std(gray))
-
-                    # Face detection
-                    face_cascade = _cv2.CascadeClassifier(
-                        _cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-                    )
-                    faces = face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(30, 30))
-                    face_count = len(faces)
-
-                    # Smile detection on first face
-                    smile_detected = False
-                    eye_count = 0
-                    if face_count > 0:
-                        x, y, fw, fh = faces[0]
-                        face_roi = gray[y:y+fh, x:x+fw]
-                        smile_cascade = _cv2.CascadeClassifier(
-                            _cv2.data.haarcascades + 'haarcascade_smile.xml'
-                        )
-                        eye_cascade = _cv2.CascadeClassifier(
-                            _cv2.data.haarcascades + 'haarcascade_eye.xml'
-                        )
-                        smiles = smile_cascade.detectMultiScale(face_roi, 1.8, 20, minSize=(25, 25))
-                        eyes = eye_cascade.detectMultiScale(face_roi, 1.1, 5)
-                        smile_detected = len(smiles) > 0
-                        eye_count = len(eyes)
-
-                    image_description = (
-                        f"Image dimensions: {w}x{h}px. "
-                        f"Mean brightness: {mean_brightness:.1f}/255. "
-                        f"Brightness variation: {std_brightness:.1f}. "
-                        f"Faces detected: {face_count}. "
-                        f"Eyes visible: {eye_count}. "
-                        f"Smile detected: {smile_detected}."
-                    )
-            except Exception as cv_err:
-                logger.warning(f"OpenCV feature extraction failed: {cv_err}")
-
-            # ── Build LLM prompt ──────────────────────────────────────
-            if analysis_type == "facial_expression":
-                prompt = f"""You are an expert psychologist analyzing facial expression data extracted from an image.
-
-Image features: {image_description}
-{f'Additional context: {additional_context}' if additional_context else ''}
-
-Based on these features, provide:
-1. Detected emotions and their intensity (0-1 scale)
-2. Facial expression characteristics
-3. Estimated confidence level
-4. Subconscious state indicators
-5. Psychological insights based on facial cues
-
-Return as JSON with keys: emotions, expressions, confidence, subconscious_state, psychological_insights"""
-
-            elif analysis_type == "subconscious":
-                prompt = f"""You are an expert in subconscious psychology analyzing facial data.
-
-Image features: {image_description}
-{f'Additional context: {additional_context}' if additional_context else ''}
-
-Analyze from a subconscious psychology perspective:
-1. Micro-expressions and hidden emotions
-2. Body language and posture indicators
-3. Stress or tension markers
-4. Subconscious thought patterns visible in expressions
-5. Recommendations for mental state optimization
-
-Return as JSON with keys: micro_expressions, body_language, stress_markers, thought_patterns, recommendations"""
-
-            else:  # general
-                prompt = f"""Provide a detailed psychological analysis based on the following image data.
-
-Image features: {image_description}
-{f'Additional context: {additional_context}' if additional_context else ''}
-
-Include:
-1. Primary subjects and their characteristics
-2. Emotional content and psychological aspects
-3. Observable patterns and behaviors
-4. Context interpretation
-5. Key insights
-
-Return as JSON with keys: subjects, emotional_content, patterns, context, insights"""
-
-            # ── Generate analysis ─────────────────────────────────────
-            if self.model:
-                response = self._generate_with_retry(prompt)
-            else:
-                response = self._get_mock_image_response(analysis_type)
-
-            result = {
-                'timestamp': time.time(),
-                'image_path': str(image_path),
-                'analysis_type': analysis_type,
-                'image_features': image_description,
-                'raw_response': response
-            }
-
-            # Try to parse JSON response
-            try:
-                if '{' in response and '}' in response:
-                    start = response.index('{')
-                    end = response.rindex('}') + 1
-                    json_str = response[start:end]
-                    parsed = json.loads(json_str)
-                    result.update(parsed)
-            except Exception as e:
-                logger.warning(f"Could not parse JSON response: {e}")
+            # Emoji for dominant emotion
+            emotion = facial_data.get("dominant_emotion", "neutral")
+            emoji   = get_emotion_emoji(emotion)
 
             self.request_count += 1
-            return result
+            return {
+                "timestamp":        time.time(),
+                "emotion_emoji":    emoji,
+                "dominant_emotion": emotion,
+                "emotional_state":  merged.get("emotional_state", f"{emoji} {emotion.replace('_', ' ').title()}"),
+                "stress_analysis":  merged.get("stress_analysis", ""),
+                "decision_patterns": merged.get("decision_patterns", []),
+                "recommendations":  merged.get("recommendations", []),
+                "predictions":      merged.get("predictions", []),
+                "subminds_insight": subminds_parsed,
+                "llama_insight":    llama_parsed,
+                "raw_subminds":     raw.get("subminds", ""),
+                "raw_llama":        raw.get("llama", ""),
+            }
 
         except Exception as e:
-            logger.error(f"Error analyzing image: {e}")
+            logger.error(f"analyze_subconscious_patterns error: {e}")
             self.error_count += 1
-            return self._get_error_response(str(e))
-    
-    def _get_mock_image_response(self, analysis_type: str) -> str:
-        """
-        Get mock response for image analysis when model is not available
-        
-        Args:
-            analysis_type: Type of analysis requested
-            
-        Returns:
-            Mock response string
-        """
-        if analysis_type == "facial_expression":
-            return """{
-    "emotions": {"neutral": 0.4, "focused": 0.35, "confident": 0.25},
-    "expressions": ["slight frown", "concentrated gaze", "relaxed jaw"],
-    "confidence": 0.82,
-    "subconscious_state": "Alert and focused",
-    "psychological_insights": "Subject shows concentration with underlying determination"
+            return self._error_response(str(e))
+
+    def _build_pattern_prompt(self, facial_data, telemetry, art_analysis, context) -> str:
+        emotion = facial_data.get("dominant_emotion", "unknown")
+        emoji   = get_emotion_emoji(emotion)
+        prompt  = f"""You are an expert F1 sports psychologist. Analyse the driver's subconscious state.
+
+FACIAL DATA:
+- Dominant emotion: {emoji} {emotion}
+- Confidence: {facial_data.get('confidence', 0):.2f}
+- Valence: {facial_data.get('valence', 0):.2f}  (−1=negative, +1=positive)
+- Arousal: {facial_data.get('arousal', 0):.2f}  (0=calm, 1=excited)
+- Stress level: {facial_data.get('stress_level', 0)}/10
+
+TELEMETRY:
+- Speed: {telemetry.get('speed', 0):.1f} km/h
+- Steering: {telemetry.get('steering', 0):.3f}
+- Track position: {telemetry.get('track_position', 0):.3f}
+"""
+        if art_analysis:
+            prompt += f"\nART ANALYSIS: {art_analysis}\n"
+        if context:
+            prompt += f"\nCONTEXT: {context}\n"
+
+        prompt += """
+Respond ONLY with valid JSON:
+{
+  "emotional_state": "one-sentence summary with emoji",
+  "stress_analysis": "detailed stress assessment",
+  "decision_patterns": ["pattern1", "pattern2", "pattern3"],
+  "recommendations": ["rec1", "rec2", "rec3"],
+  "predictions": ["prediction1", "prediction2"]
 }"""
-        elif analysis_type == "subconscious":
-            return """{
-    "micro_expressions": ["brief tension in eye area", "momentary jaw clench"],
-    "body_language": "Forward-leaning posture indicating engagement",
-    "stress_markers": "Minimal stress detected",
-    "thought_patterns": ["Problem-solving mode", "High focus"],
-    "recommendations": ["Maintain current mental state", "Take breaks every 30 minutes"]
-}"""
-        else:
-            return """{
-    "subjects": "Human subject in focused state",
-    "emotional_content": "Neutral to positive emotional expression",
-    "patterns": ["Concentrated attention", "Calm demeanor"],
-    "context": "Professional or academic setting",
-    "insights": "Subject appears engaged and mentally present"
-}"""
-    
-    def get_statistics(self) -> Dict[str, Any]:
-        """
-        Get client statistics
-        
-        Returns:
-            Statistics dictionary
-        """
-        success_rate = 0.0
-        if self.request_count > 0:
-            success_rate = (self.request_count - self.error_count) / self.request_count
-        
+        return prompt
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _parse_json(self, text: str) -> Dict[str, Any]:
+        """Extract and parse the first JSON object found in text."""
+        if not text:
+            return {}
+        try:
+            start = text.index("{")
+            end   = text.rindex("}") + 1
+            return json.loads(text[start:end])
+        except Exception:
+            return {}
+
+    def _mock_pattern_response(self, facial_data: Dict, telemetry: Dict) -> str:
+        emotion = facial_data.get("dominant_emotion", "neutral")
+        emoji   = get_emotion_emoji(emotion)
+        speed   = telemetry.get("speed", 0)
+        return json.dumps({
+            "emotional_state":   f"{emoji} Driver is {emotion.replace('_', ' ')} — monitoring closely",
+            "stress_analysis":   "Moderate stress. Breathing pattern suggests manageable tension.",
+            "decision_patterns": [f"Consistent inputs at {speed:.0f} km/h", "Reactive steering", "Controlled braking"],
+            "recommendations":   ["Box breathing — 4s in, 4s hold, 4s out", "Narrow focus to next corner only", "Relax grip pressure"],
+            "predictions":       ["Stable performance for next 2 laps", "Watch for stress spike under pressure"],
+        })
+
+    def _mock_image_response(self) -> str:
+        return json.dumps({
+            "primary_emotion":      {"name": "focused", "intensity": 0.75},
+            "secondary_emotions":   [{"name": "calm", "intensity": 0.4}, {"name": "confident", "intensity": 0.3}],
+            "micro_expressions":    ["slight brow furrow", "steady gaze", "relaxed jaw"],
+            "stress_level":         5,
+            "arousal_level":        6,
+            "cognitive_state":      "Alert and task-focused",
+            "subconscious_drivers": ["Achievement motivation", "Competitive drive"],
+            "performance_impact":   "Current state supports optimal lap time execution",
+            "recommendations":      ["Maintain current breathing rhythm", "Visualise apex entry", "Trust muscle memory"],
+        })
+
+    def _error_response(self, msg: str) -> Dict[str, Any]:
         return {
-            'total_requests': self.request_count,
-            'successful_requests': self.request_count - self.error_count,
-            'failed_requests': self.error_count,
-            'success_rate': success_rate,
-            'total_tokens': self.total_tokens,
-            'model_available': self.model is not None,
-            'ibm_wml_available': IBM_WML_AVAILABLE
+            "timestamp":        time.time(),
+            "error":            True,
+            "error_message":    msg,
+            "emotion_emoji":    "⚠️",
+            "emotional_state":  "⚠️ Analysis error",
+            "stress_analysis":  "Analysis failed — check logs",
+            "decision_patterns": [],
+            "recommendations":  ["Retry analysis"],
+            "predictions":      [],
         }
-    
-    def is_available(self) -> bool:
-        """
-        Check if Granite client is available
-        
-        Returns:
-            True if client is ready to use
-        """
-        return self.model is not None
-    
-    def reset_statistics(self) -> None:
-        """Reset statistics counters"""
+
+    # ── Stats ─────────────────────────────────────────────────────────────────
+
+    def get_statistics(self) -> Dict[str, Any]:
+        success_rate = (
+            (self.request_count - self.error_count) / self.request_count
+            if self.request_count > 0 else 0.0
+        )
+        return {
+            "total_requests":       self.request_count,
+            "successful_requests":  self.request_count - self.error_count,
+            "failed_requests":      self.error_count,
+            "success_rate":         success_rate,
+            "subminds_available":   self.subminds_model is not None,
+            "llama_available":      self.llama_model is not None,
+            "ibm_wml_available":    IBM_WML_AVAILABLE,
+        }
+
+    def reset_statistics(self):
         self.request_count = 0
-        self.error_count = 0
-        self.total_tokens = 0
-        logger.info("Statistics reset")
-
-
-# Example usage
-if __name__ == "__main__":
-    print("Testing AI Client (Llama 4 Maverick via WatsonX)...")
-    
-    try:
-        # Initialize client
-        client = GraniteAIClient(
-            config_path='config/ibm_granite_config.yaml'
-        )
-        
-        print(f"Client available: {client.is_available()}")
-        
-        # Test data
-        facial_data = {
-            'dominant_emotion': 'focused',
-            'confidence': 0.85,
-            'valence': 0.3,
-            'arousal': 0.7,
-            'stress_level': 6
-        }
-        
-        telemetry = {
-            'speed': 180.5,
-            'steering': -0.3,
-            'track_position': 0.1,
-            'lap_time': 95.3
-        }
-        
-        # Analyze patterns
-        print("\nAnalyzing subconscious patterns...")
-        insights = client.analyze_subconscious_patterns(
-            facial_data=facial_data,
-            telemetry=telemetry
-        )
-        
-        print("\nInsights:")
-        print(f"Emotional State: {insights.get('emotional_state')}")
-        print(f"Stress Analysis: {insights.get('stress_analysis')}")
-        print(f"Recommendations: {insights.get('recommendations')}")
-        
-        # Print statistics
-        stats = client.get_statistics()
-        print("\nStatistics:")
-        for key, value in stats.items():
-            print(f"  {key}: {value}")
-        
-    except Exception as e:
-        print(f"Error: {e}")
-        import traceback
-        traceback.print_exc()
-
-# Made with Bob
+        self.error_count   = 0
+        self.total_tokens  = 0

@@ -189,7 +189,7 @@ class SubMindsApp:
         self.status_labels = {}
         labels = [
             ('Camera', 'camera_status'),
-            ('IBM Granite', 'granite_status'),
+            ('Dual AI', 'granite_status'),
             ('Analysis', 'analysis_status')
         ]
 
@@ -269,31 +269,32 @@ class SubMindsApp:
         else:
             self.log_output("⚠ Face detection module not available")
         
-        # Initialize IBM Granite
-        if GRANITE_AVAILABLE and self.config['ibm_api_key'] and self.config['ibm_space_id']:
+        # Initialize Dual AI (SubMindsAI + Llama 4 Maverick)
+        if GRANITE_AVAILABLE:
             try:
                 self.granite_client = GraniteAIClient(
                     config_path='config/ibm_granite_config.yaml',
-                    api_key=self.config['ibm_api_key'],
-                    space_id=self.config['ibm_space_id'],
+                    api_key=self.config['ibm_api_key'] or None,
+                    space_id=self.config['ibm_space_id'] or None,
                     url=self.config['ibm_watson_url']
                 )
-                if self.granite_client.is_available():
+                stats = self.granite_client.get_statistics()
+                if stats['subminds_available'] and stats['llama_available']:
                     self.update_status('granite_status', 'green')
-                    self.log_output("✓ IBM Granite AI initialized")
+                    self.log_output("✓ SubMindsAI custom model  — ONLINE 🤖")
+                    self.log_output("✓ Llama 4 Maverick model   — ONLINE 🦙")
+                elif stats['subminds_available'] or stats['llama_available']:
+                    self.update_status('granite_status', 'yellow')
+                    self.log_output("⚠ One AI model online, one in mock mode")
                 else:
                     self.update_status('granite_status', 'yellow')
-                    self.log_output("⚠ IBM Granite in mock mode")
+                    self.log_output("⚠ Both AI models in mock mode (check credentials)")
             except Exception as e:
                 self.update_status('granite_status', 'yellow')
-                self.log_output(f"⚠ IBM Granite in mock mode: {e}")
-        else:
-            self.update_status('granite_status', 'yellow')
-            self.log_output("⚠ IBM Granite not configured (mock mode)")
-            if GRANITE_AVAILABLE:
+                self.log_output(f"⚠ AI init error (mock mode): {e}")
                 try:
                     self.granite_client = GraniteAIClient()
-                except:
+                except Exception:
                     pass
         
         self.log_output("\nSystem ready. Click 'Start Analysis' to begin.")
@@ -386,6 +387,7 @@ class SubMindsApp:
                 'timestamp',
                 'image_file',
                 'dominant_emotion',
+                'emotion_emoji',
                 'confidence',
                 'valence',
                 'arousal',
@@ -548,73 +550,118 @@ class SubMindsApp:
     def display_insights(self, insights: Dict[str, Any], image_filename: str = None,
                          facial_data: Dict[str, Any] = None, telemetry: Dict[str, Any] = None,
                          image_analysis: Dict[str, Any] = None):
-        """Display analysis insights and store record for CSV export"""
+        """Display dual-model analysis insights with emoji emotions."""
         timestamp = datetime.now().strftime("%H:%M:%S")
         facial_data = facial_data or {}
-        telemetry = telemetry or {}
+        telemetry   = telemetry   or {}
 
-        # ── Store record for CSV export ───────────────────────────────
+        # ── Emotion emoji ─────────────────────────────────────────────
+        from src.ai_engine.granite_client import get_emotion_emoji
+        emotion       = facial_data.get('dominant_emotion', 'neutral')
+        emotion_emoji = insights.get('emotion_emoji', get_emotion_emoji(emotion))
+
+        # ── CSV record ────────────────────────────────────────────────
         self.session_records.append({
-            'analysis_number': self.analysis_count + 1,
-            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            'image_file': image_filename or '',
-            'dominant_emotion': facial_data.get('dominant_emotion', ''),
-            'confidence': round(facial_data.get('confidence', 0.0), 3),
-            'valence': round(facial_data.get('valence', 0.0), 3),
-            'arousal': round(facial_data.get('arousal', 0.0), 3),
-            'stress_level': facial_data.get('stress_level', ''),
-            'face_detected': facial_data.get('face_detected', False),
-            'speed_kmh': round(telemetry.get('speed', 0.0), 1),
-            'steering': round(telemetry.get('steering', 0.0), 3),
-            'track_position': round(telemetry.get('track_position', 0.0), 3),
-            'emotional_state': insights.get('emotional_state', ''),
-            'stress_analysis': insights.get('stress_analysis', ''),
+            'analysis_number':  self.analysis_count + 1,
+            'timestamp':        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'image_file':       image_filename or '',
+            'dominant_emotion': emotion,
+            'emotion_emoji':    emotion_emoji,
+            'confidence':       round(facial_data.get('confidence', 0.0), 3),
+            'valence':          round(facial_data.get('valence', 0.0), 3),
+            'arousal':          round(facial_data.get('arousal', 0.0), 3),
+            'stress_level':     facial_data.get('stress_level', ''),
+            'face_detected':    facial_data.get('face_detected', False),
+            'speed_kmh':        round(telemetry.get('speed', 0.0), 1),
+            'steering':         round(telemetry.get('steering', 0.0), 3),
+            'track_position':   round(telemetry.get('track_position', 0.0), 3),
+            'emotional_state':  insights.get('emotional_state', ''),
+            'stress_analysis':  insights.get('stress_analysis', ''),
             'decision_patterns': ' | '.join(insights.get('decision_patterns', [])),
-            'recommendations': ' | '.join(insights.get('recommendations', [])),
-            'predictions': ' | '.join(insights.get('predictions', [])),
+            'recommendations':  ' | '.join(insights.get('recommendations', [])),
+            'predictions':      ' | '.join(insights.get('predictions', [])),
         })
-        
-        output = f"\n{'='*60}\n"
-        output += f"[{timestamp}] Analysis #{self.analysis_count + 1}\n"
-        output += f"{'='*60}\n"
-        
+
+        # ── Build display output ──────────────────────────────────────
+        sep = "═" * 62
+        output  = f"\n{sep}\n"
+        output += f"  {emotion_emoji}  Analysis #{self.analysis_count + 1}  [{timestamp}]\n"
+        output += f"{sep}\n"
+
         if image_filename:
-            output += f"📷 Image: {image_filename}\n\n"
-        
-        # Emotional State
-        output += f"😊 Emotional State:\n"
-        output += f"   {insights.get('emotional_state', 'Unknown')}\n\n"
-        
-        # Stress Analysis
-        output += f"💪 Stress Analysis:\n"
-        output += f"   {insights.get('stress_analysis', 'N/A')}\n\n"
-        
-        # Decision Patterns
-        decision_patterns = insights.get('decision_patterns', [])
-        if decision_patterns:
-            output += f"🧠 Decision Patterns:\n"
-            for pattern in decision_patterns[:3]:
-                output += f"   • {pattern}\n"
+            output += f"📷  {image_filename}\n\n"
+
+        # Emotion badge
+        output += f"{'─'*62}\n"
+        output += f"  EMOTION  {emotion_emoji}  {emotion.replace('_', ' ').upper()}\n"
+        output += f"  Stress {facial_data.get('stress_level', '?')}/10  |  "
+        output += f"Valence {facial_data.get('valence', 0):+.2f}  |  "
+        output += f"Arousal {facial_data.get('arousal', 0):.2f}\n"
+        output += f"{'─'*62}\n\n"
+
+        # ── SubMindsAI output ─────────────────────────────────────────
+        subminds = insights.get('subminds_insight', {})
+        output += f"🤖  SubMindsAI (Custom Model)\n"
+        output += f"    {subminds.get('emotional_state', insights.get('emotional_state', '—'))}\n"
+        s_stress = subminds.get('stress_analysis', '')
+        if s_stress:
+            output += f"    💢 {s_stress}\n"
+        s_recs = subminds.get('recommendations', [])
+        if s_recs:
+            output += f"    💡 " + " | ".join(s_recs[:2]) + "\n"
+        output += "\n"
+
+        # ── Llama 4 Maverick output ───────────────────────────────────
+        llama = insights.get('llama_insight', {})
+        output += f"🦙  Llama 4 Maverick (Foundation Model)\n"
+        output += f"    {llama.get('emotional_state', insights.get('emotional_state', '—'))}\n"
+        l_stress = llama.get('stress_analysis', '')
+        if l_stress:
+            output += f"    💢 {l_stress}\n"
+        l_recs = llama.get('recommendations', [])
+        if l_recs:
+            output += f"    💡 " + " | ".join(l_recs[:2]) + "\n"
+        output += "\n"
+
+        # ── Deep image analysis (if available) ───────────────────────
+        if image_analysis:
+            merged = image_analysis.get('merged', {})
+            if merged:
+                output += f"{'─'*62}\n"
+                output += f"🔬  DEEP IMAGE ANALYSIS\n"
+                primary = merged.get('primary_emotion', {})
+                if isinstance(primary, dict):
+                    pname  = primary.get('name', '?')
+                    pintens = primary.get('intensity', 0)
+                    pemoji = get_emotion_emoji(pname)
+                    output += f"    Primary: {pemoji} {pname.title()} ({pintens:.0%})\n"
+                sec = merged.get('secondary_emotions', [])
+                if sec:
+                    sec_str = "  ".join(
+                        f"{get_emotion_emoji(e.get('name','?'))} {e.get('name','?').title()}"
+                        for e in sec[:3]
+                    )
+                    output += f"    Secondary: {sec_str}\n"
+                cog = merged.get('cognitive_state', '')
+                if cog:
+                    output += f"    🧠 {cog}\n"
+                perf = merged.get('performance_impact', '')
+                if perf:
+                    output += f"    🏎️  {perf}\n"
+                deep_recs = merged.get('recommendations', [])
+                if deep_recs:
+                    output += f"    ✅ " + "\n    ✅ ".join(deep_recs[:3]) + "\n"
+                output += "\n"
+
+        # ── Merged predictions ────────────────────────────────────────
+        preds = insights.get('predictions', [])
+        if preds:
+            output += f"🔮  Predictions\n"
+            for p in preds[:2]:
+                output += f"    → {p}\n"
             output += "\n"
-        
-        # Recommendations
-        recommendations = insights.get('recommendations', [])
-        if recommendations:
-            output += f"💡 AI Recommendations:\n"
-            for rec in recommendations[:3]:
-                output += f"   ✓ {rec}\n"
-            output += "\n"
-        
-        # Predictions
-        predictions = insights.get('predictions', [])
-        if predictions:
-            output += f"🔮 Predictions:\n"
-            for pred in predictions[:2]:
-                output += f"   → {pred}\n"
-            output += "\n"
-        
-        output += f"{'='*60}\n"
-        
+
+        output += f"{sep}\n"
         self.log_output(output)
     
     def update_statistics(self):
