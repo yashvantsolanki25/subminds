@@ -66,8 +66,10 @@ Then update `CAMERA_ID` in `.env`
 
 ### IBM Granite Not Working?
 - App works in mock mode without credentials
-- Check your API key and project ID
+- Check your API key and project ID in `.env`
 - Verify internet connection
+- Live Granite requires `ibm-watson-machine-learning`, which may not install on Python 3.14.
+- Use Python 3.11 and install the IBM package for live model support.
 
 ### Module Errors?
 ```bash

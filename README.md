@@ -277,7 +277,19 @@ python -c "import cv2; print([i for i in range(5) if cv2.VideoCapture(i).isOpene
 Try setting `CAMERA_ID=1` in `.env` if camera 0 fails.
 
 ### IBM Granite not connecting
-The app automatically falls back to mock mode. Check your API key and project ID in `.env`. Verify your IBM Cloud region matches the URL in `config/ibm_granite_config.yaml` (default: `eu-gb`).
+The app automatically falls back to mock mode if live IBM Granite is not available.
+- Verify `IBM_CLOUD_API_KEY` and `IBM_PROJECT_ID` are set in `.env`.
+- If your IBM project uses a Watson Studio space, also set `IBM_SPACE_ID`.
+- Verify the URL in `config/ibm_granite_config.yaml` matches your IBM Cloud region (default: `eu-gb`).
+- Live IBM Granite requires the `ibm-watson-machine-learning` package and may not install cleanly on Python 3.14+.
+- For best results, use Python 3.11 with a virtual environment, then install the IBM package:
+```bash
+python3.11 -m venv .venv
+.venv/Scripts/activate
+pip install -U pip setuptools wheel
+pip install -r requirements.txt
+pip install ibm-watson-machine-learning ibm-cloud-sdk-core
+```
 
 ### Module import errors
 ```bash

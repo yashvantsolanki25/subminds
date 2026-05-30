@@ -75,7 +75,8 @@ class SubMindsApp:
         # Configuration
         self.config = {
             'ibm_api_key': os.getenv('IBM_CLOUD_API_KEY', ''),
-            'ibm_project_id': os.getenv('IBM_PROJECT_ID', ''),
+            'ibm_space_id': os.getenv('IBM_SPACE_ID', ''),
+            'ibm_watson_url': os.getenv('IBM_WATSON_URL', 'https://us-south.ml.cloud.ibm.com'),
             'camera_id': int(os.getenv('CAMERA_ID', '0')),
             'analysis_interval': float(os.getenv('ANALYSIS_INTERVAL', '2.0')),
         }
@@ -269,11 +270,13 @@ class SubMindsApp:
             self.log_output("⚠ Face detection module not available")
         
         # Initialize IBM Granite
-        if GRANITE_AVAILABLE and self.config['ibm_api_key'] and self.config['ibm_project_id']:
+        if GRANITE_AVAILABLE and self.config['ibm_api_key'] and self.config['ibm_space_id']:
             try:
                 self.granite_client = GraniteAIClient(
+                    config_path='config/ibm_granite_config.yaml',
                     api_key=self.config['ibm_api_key'],
-                    project_id=self.config['ibm_project_id']
+                    space_id=self.config['ibm_space_id'],
+                    url=self.config['ibm_watson_url']
                 )
                 if self.granite_client.is_available():
                     self.update_status('granite_status', 'green')
@@ -508,13 +511,28 @@ class SubMindsApp:
                     'track_position': random.uniform(-0.2, 0.2),
                 }
                 
-                # Analyze with Granite
+                # Analyze with Granite AI
                 if self.granite_client:
+                    # Analyze facial data and telemetry
                     insights = self.granite_client.analyze_subconscious_patterns(
                         facial_data=facial_data,
                         telemetry=telemetry
                     )
-                    self.display_insights(insights, image_filename, facial_data, telemetry)
+                    
+                    # Also analyze the captured image directly
+                    image_analysis = None
+                    if CV2_AVAILABLE and os.path.exists(image_path):
+                        try:
+                            image_analysis = self.granite_client.analyze_image(
+                                image_path=image_path,
+                                analysis_type="facial_expression",
+                                additional_context="F1 driver performance analysis"
+                            )
+                            self.log_output(f"✓ Image sent to AI for analysis: {image_filename}")
+                        except Exception as e:
+                            self.log_output(f"⚠ Image analysis error: {e}")
+                    
+                    self.display_insights(insights, image_filename, facial_data, telemetry, image_analysis)
                     self.analysis_count += 1
                     
                     # Update statistics
@@ -528,7 +546,8 @@ class SubMindsApp:
                 time.sleep(1)
     
     def display_insights(self, insights: Dict[str, Any], image_filename: str = None,
-                         facial_data: Dict[str, Any] = None, telemetry: Dict[str, Any] = None):
+                         facial_data: Dict[str, Any] = None, telemetry: Dict[str, Any] = None,
+                         image_analysis: Dict[str, Any] = None):
         """Display analysis insights and store record for CSV export"""
         timestamp = datetime.now().strftime("%H:%M:%S")
         facial_data = facial_data or {}
@@ -611,39 +630,50 @@ class SubMindsApp:
         """Show configuration dialog"""
         dialog = tk.Toplevel(self.root)
         dialog.title("Configuration")
-        dialog.geometry("500x300")
+        dialog.geometry("550x400")
         
         ttk.Label(dialog, text="IBM Cloud API Key:").grid(row=0, column=0, padx=10, pady=10, sticky="w")
         api_key_entry = ttk.Entry(dialog, width=50, show="*")
         api_key_entry.insert(0, self.config['ibm_api_key'])
         api_key_entry.grid(row=0, column=1, padx=10, pady=10)
         
-        ttk.Label(dialog, text="IBM Project ID:").grid(row=1, column=0, padx=10, pady=10, sticky="w")
-        project_id_entry = ttk.Entry(dialog, width=50)
-        project_id_entry.insert(0, self.config['ibm_project_id'])
-        project_id_entry.grid(row=1, column=1, padx=10, pady=10)
+        ttk.Label(dialog, text="IBM Space ID:").grid(row=1, column=0, padx=10, pady=10, sticky="w")
+        space_id_entry = ttk.Entry(dialog, width=50)
+        space_id_entry.insert(0, self.config['ibm_space_id'])
+        space_id_entry.grid(row=1, column=1, padx=10, pady=10)
         
-        ttk.Label(dialog, text="Camera ID:").grid(row=2, column=0, padx=10, pady=10, sticky="w")
+        ttk.Label(dialog, text="Watson URL:").grid(row=2, column=0, padx=10, pady=10, sticky="w")
+        watson_url_entry = ttk.Entry(dialog, width=50)
+        watson_url_entry.insert(0, self.config['ibm_watson_url'])
+        watson_url_entry.grid(row=2, column=1, padx=10, pady=10)
+        
+        ttk.Label(dialog, text="Camera ID:").grid(row=3, column=0, padx=10, pady=10, sticky="w")
         camera_id_entry = ttk.Entry(dialog, width=50)
         camera_id_entry.insert(0, str(self.config['camera_id']))
-        camera_id_entry.grid(row=2, column=1, padx=10, pady=10)
+        camera_id_entry.grid(row=3, column=1, padx=10, pady=10)
         
         def save_config():
             self.config['ibm_api_key'] = api_key_entry.get()
-            self.config['ibm_project_id'] = project_id_entry.get()
+            self.config['ibm_space_id'] = space_id_entry.get()
+            self.config['ibm_watson_url'] = watson_url_entry.get()
             self.config['camera_id'] = int(camera_id_entry.get())
             
             # Save to .env
             with open('.env', 'w') as f:
                 f.write(f"IBM_CLOUD_API_KEY={self.config['ibm_api_key']}\n")
-                f.write(f"IBM_PROJECT_ID={self.config['ibm_project_id']}\n")
+                f.write(f"IBM_SPACE_ID={self.config['ibm_space_id']}\n")
+                f.write(f"IBM_WATSON_URL={self.config['ibm_watson_url']}\n")
                 f.write(f"CAMERA_ID={self.config['camera_id']}\n")
                 f.write(f"ANALYSIS_INTERVAL={self.config['analysis_interval']}\n")
+                f.write(f"MODEL_ID=meta-llama/llama-4-maverick-17b-128e-instruct-fp8\n")
+                f.write(f"TEMPERATURE=0.7\n")
+                f.write(f"TOP_P=0.9\n")
+                f.write(f"MAX_TOKENS=2000\n")
             
             messagebox.showinfo("Success", "Configuration saved! Restart for changes to take effect.")
             dialog.destroy()
         
-        ttk.Button(dialog, text="Save", command=save_config).grid(row=3, column=0, columnspan=2, pady=20)
+        ttk.Button(dialog, text="Save", command=save_config).grid(row=4, column=0, columnspan=2, pady=20)
     
     def update_status(self, key: str, color: str):
         """Update status indicator color"""

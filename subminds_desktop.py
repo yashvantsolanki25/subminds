@@ -75,6 +75,7 @@ class SubMindsDesktopApp:
         return {
             'ibm_api_key': os.getenv('IBM_CLOUD_API_KEY', ''),
             'ibm_project_id': os.getenv('IBM_PROJECT_ID', ''),
+            'ibm_space_id': os.getenv('IBM_SPACE_ID', ''),
             'camera_id': int(os.getenv('CAMERA_ID', '0')),
             'analysis_interval': float(os.getenv('ANALYSIS_INTERVAL', '2.0')),
         }
@@ -221,11 +222,13 @@ class SubMindsDesktopApp:
         self.log_output("Initializing SubMinds components...")
         
         # Initialize IBM Granite
-        if GraniteAIClient and self.config['ibm_api_key'] and self.config['ibm_project_id']:
+        if GraniteAIClient and self.config['ibm_api_key'] and (self.config['ibm_project_id'] or self.config['ibm_space_id']):
             try:
                 self.granite_client = GraniteAIClient(
+                    config_path='config/ibm_granite_config.yaml',
                     api_key=self.config['ibm_api_key'],
-                    project_id=self.config['ibm_project_id']
+                    project_id=self.config['ibm_project_id'],
+                    space_id=self.config['ibm_space_id']
                 )
                 if self.granite_client.is_available():
                     self.update_status('granite_status', 'green')
@@ -416,8 +419,14 @@ class SubMindsDesktopApp:
         env_content = f"""# SubMinds Desktop Application Configuration
 IBM_CLOUD_API_KEY={self.config['ibm_api_key']}
 IBM_PROJECT_ID={self.config['ibm_project_id']}
+IBM_SPACE_ID={self.config.get('ibm_space_id', '')}
+IBM_WATSON_URL={self.config.get('ibm_watson_url', 'https://us-south.ml.cloud.ibm.com')}
 CAMERA_ID={self.config['camera_id']}
 ANALYSIS_INTERVAL={self.config['analysis_interval']}
+MODEL_ID=meta-llama/llama-4-maverick-17b-128e-instruct-fp8
+TEMPERATURE=0.7
+TOP_P=0.9
+MAX_TOKENS=2000
 """
         with open('.env', 'w') as f:
             f.write(env_content)

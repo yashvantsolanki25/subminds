@@ -18,11 +18,13 @@ print()
 # Test 1: Check environment variables
 print("1. Testing Environment Configuration...")
 api_key = os.getenv('IBM_CLOUD_API_KEY')
-project_id = os.getenv('IBM_PROJECT_ID')
+space_id = os.getenv('IBM_SPACE_ID')
+watson_url = os.getenv('IBM_WATSON_URL', 'https://us-south.ml.cloud.ibm.com')
 camera_id = int(os.getenv('CAMERA_ID', '0'))
 
 print(f"   ✓ IBM API Key: {'*' * 20}{api_key[-10:] if api_key else 'NOT SET'}")
-print(f"   ✓ IBM Project ID: {project_id[:20] if project_id else 'NOT SET'}...")
+print(f"   ✓ IBM Space ID: {space_id[:20] if space_id else 'NOT SET'}...")
+print(f"   ✓ Watson URL: {watson_url}")
 print(f"   ✓ Camera ID: {camera_id}")
 print()
 

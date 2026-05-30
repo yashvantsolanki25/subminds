@@ -1,8 +1,9 @@
 """
-IBM Granite AI Client for pattern analysis
+AI Client for pattern analysis — powered by Meta Llama 4 Maverick via IBM WatsonX
 Production-ready implementation with comprehensive error handling
 """
 import os
+import re
 import time
 import logging
 from typing import Dict, Any, List, Optional
@@ -10,12 +11,12 @@ from pathlib import Path
 import json
 
 try:
-    from ibm_watson_machine_learning.foundation_models import Model
-    from ibm_watson_machine_learning.metanames import GenTextParamsMetaNames as GenParams
+    from ibm_watsonx_ai import Credentials
+    from ibm_watsonx_ai.foundation_models import ModelInference
     IBM_WML_AVAILABLE = True
 except ImportError:
     IBM_WML_AVAILABLE = False
-    logging.warning("IBM Watson Machine Learning not available")
+    logging.warning("ibm-watsonx-ai not available — run: pip install ibm-watsonx-ai")
 
 try:
     import yaml
@@ -24,19 +25,28 @@ except ImportError:
     YAML_AVAILABLE = False
     logging.warning("PyYAML not available")
 
+try:
+    from dotenv import load_dotenv
+    DOTENV_AVAILABLE = True
+    load_dotenv()
+except ImportError:
+    DOTENV_AVAILABLE = False
+    logging.warning("python-dotenv not available")
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 class GraniteAIClient:
-    """Client for IBM Granite AI model with comprehensive error handling"""
+    """AI client powered by Meta Llama 4 Maverick via IBM WatsonX"""
     
     def __init__(
         self,
         config_path: Optional[str] = None,
         api_key: Optional[str] = None,
         project_id: Optional[str] = None,
+        space_id: Optional[str] = None,
         url: str = "https://us-south.ml.cloud.ibm.com"
     ):
         """
@@ -46,6 +56,7 @@ class GraniteAIClient:
             config_path: Path to configuration file (YAML)
             api_key: IBM Cloud API key (overrides config file)
             project_id: IBM Watson Studio project ID (overrides config file)
+            space_id: IBM Watson Machine Learning space ID (overrides config file)
             url: IBM Watson Machine Learning URL
         """
         self.config_path = config_path
@@ -53,6 +64,7 @@ class GraniteAIClient:
         self.model: Optional[Any] = None
         self.api_key: Optional[str] = None
         self.project_id: Optional[str] = None
+        self.space_id: Optional[str] = None
         
         # Load configuration
         if config_path and Path(config_path).exists():
@@ -65,15 +77,37 @@ class GraniteAIClient:
             self.api_key = api_key
         if project_id:
             self.project_id = project_id
+        if space_id:
+            self.space_id = space_id
         
-        # Get from environment if not set
+        # Override with config file values if not provided directly
+        if not self.api_key:
+            self.api_key = self.config.get('api_key')
+        if not self.project_id:
+            self.project_id = self.config.get('project_id')
+        if not self.space_id:
+            self.space_id = self.config.get('space_id')
+        self.url = self.config.get('url', self.url)
+        
+        # Get from environment if still not set
         if not self.api_key:
             self.api_key = os.getenv('IBM_CLOUD_API_KEY')
         if not self.project_id:
             self.project_id = os.getenv('IBM_PROJECT_ID')
+        if not self.space_id:
+            self.space_id = os.getenv('IBM_SPACE_ID')
+
+        for attr in ['project_id', 'space_id']:
+            value = getattr(self, attr)
+            if isinstance(value, str):
+                value = value.strip()
+                if not value or (value.startswith('${') and value.endswith('}')):
+                    setattr(self, attr, None)
+                else:
+                    setattr(self, attr, value)
         
         # Initialize model if credentials available
-        if IBM_WML_AVAILABLE and self.api_key and self.project_id:
+        if IBM_WML_AVAILABLE and self.api_key and (self.project_id or self.space_id):
             try:
                 self.model = self._initialize_model()
                 logger.info("IBM Granite client initialized successfully")
@@ -111,12 +145,36 @@ class GraniteAIClient:
             if 'ibm_granite' in config:
                 config = config['ibm_granite']
             
+            config = self._resolve_env_variables(config)
             logger.info(f"Configuration loaded from {config_path}")
             return config
             
         except Exception as e:
             logger.error(f"Error loading config: {e}")
             return self._get_default_config()
+
+    def _resolve_env_variables(self, config: Any) -> Any:
+        """
+        Resolve environment variable placeholders in configuration values.
+
+        Args:
+            config: Configuration data loaded from YAML
+
+        Returns:
+            Configuration with ${VAR} values replaced by environment variables
+        """
+        if isinstance(config, dict):
+            return {k: self._resolve_env_variables(v) for k, v in config.items()}
+        if isinstance(config, list):
+            return [self._resolve_env_variables(v) for v in config]
+        if isinstance(config, str):
+            def repl(match):
+                env_var = match.group(1)
+                return os.getenv(env_var, '')
+
+            resolved = re.sub(r"\$\{([^}]+)\}", repl, config)
+            return resolved if resolved else None
+        return config
     
     def _get_default_config(self) -> Dict[str, Any]:
         """
@@ -128,7 +186,7 @@ class GraniteAIClient:
         return {
             'url': self.url,
             'model': {
-                'id': 'ibm/granite-13b-chat-v2',
+                'id': 'meta-llama/llama-4-maverick-17b-128e-instruct-fp8',
                 'version': 'latest'
             },
             'parameters': {
@@ -143,44 +201,63 @@ class GraniteAIClient:
                 'tokens_per_minute': 100000,
                 'retry_attempts': 3,
                 'retry_delay': 2
-            }
+            },
+            'space_id': None
         }
     
     def _initialize_model(self) -> Any:
         """
-        Initialize IBM Granite model
+        Initialize Llama 4 Maverick model via IBM WatsonX ModelInference
         
         Returns:
-            Initialized model instance
+            Initialized ModelInference instance
         """
         if not IBM_WML_AVAILABLE:
-            raise RuntimeError("IBM Watson Machine Learning not available")
+            raise RuntimeError("ibm-watsonx-ai not available — run: pip install ibm-watsonx-ai")
         
-        if not self.api_key or not self.project_id:
-            raise ValueError("API key and project ID are required")
+        if not self.api_key or not (self.project_id or self.space_id):
+            raise ValueError("API key plus either project_id or space_id are required")
         
-        credentials = {
-            "url": self.config.get('url', self.url),
-            "apikey": self.api_key
-        }
-        
-        model_id = self.config.get('model', {}).get('id', 'ibm/granite-13b-chat-v2')
-        
-        parameters = {
-            GenParams.MAX_NEW_TOKENS: self.config.get('parameters', {}).get('max_tokens', 2000),
-            GenParams.TEMPERATURE: self.config.get('parameters', {}).get('temperature', 0.7),
-            GenParams.TOP_P: self.config.get('parameters', {}).get('top_p', 0.9),
-            GenParams.TOP_K: self.config.get('parameters', {}).get('top_k', 50),
-        }
-        
-        model = Model(
-            model_id=model_id,
-            params=parameters,
-            credentials=credentials,
-            project_id=self.project_id
+        credentials = Credentials(
+            url=self.config.get('url', self.url),
+            api_key=self.api_key
         )
         
-        return model
+        model_id = self.config.get('model', {}).get('id', 'meta-llama/llama-4-maverick-17b-128e-instruct-fp8')
+        
+        params = {
+            "max_new_tokens": self.config.get('parameters', {}).get('max_tokens', 2000),
+            "temperature": self.config.get('parameters', {}).get('temperature', 0.7),
+            "top_p": self.config.get('parameters', {}).get('top_p', 0.9),
+        }
+
+        last_exception = None
+        if self.project_id:
+            try:
+                model = ModelInference(
+                    model_id=model_id,
+                    credentials=credentials,
+                    project_id=self.project_id,
+                    params=params
+                )
+                return model
+            except Exception as e:
+                last_exception = e
+                logger.warning(f"Project ID initialization failed: {e}")
+                if self.space_id is None:
+                    raise
+                logger.info("Retrying with space_id because project_id initialization failed")
+
+        if self.space_id:
+            model = ModelInference(
+                model_id=model_id,
+                credentials=credentials,
+                space_id=self.space_id,
+                params=params
+            )
+            return model
+
+        raise last_exception or RuntimeError("Unable to initialize model")
     
     def analyze_subconscious_patterns(
         self,
@@ -433,6 +510,196 @@ Format your response as structured JSON with keys: emotional_state, stress_analy
             'predictions': []
         }
     
+    def analyze_image(
+        self,
+        image_path: str,
+        analysis_type: str = "facial_expression",
+        additional_context: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Analyze an image using the AI model.
+        
+        Since the WatsonX text model does not accept raw image bytes, this method
+        runs OpenCV-based feature extraction locally and then sends a structured
+        text description to the LLM for deeper psychological interpretation.
+        
+        Args:
+            image_path: Path to the image file
+            analysis_type: Type of analysis (facial_expression, general, subconscious)
+            additional_context: Additional context for the analysis
+            
+        Returns:
+            Dictionary containing AI analysis results
+        """
+        try:
+            from pathlib import Path as _Path
+
+            image_file = _Path(image_path)
+            if not image_file.exists():
+                raise FileNotFoundError(f"Image file not found: {image_path}")
+
+            # ── Local feature extraction via OpenCV ───────────────────
+            image_description = f"Image file: {image_file.name}"
+            try:
+                import cv2 as _cv2
+                import numpy as _np
+
+                frame = _cv2.imread(str(image_path))
+                if frame is not None:
+                    gray = _cv2.cvtColor(frame, _cv2.COLOR_BGR2GRAY)
+                    h, w = gray.shape
+                    mean_brightness = float(_np.mean(gray))
+                    std_brightness = float(_np.std(gray))
+
+                    # Face detection
+                    face_cascade = _cv2.CascadeClassifier(
+                        _cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+                    )
+                    faces = face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(30, 30))
+                    face_count = len(faces)
+
+                    # Smile detection on first face
+                    smile_detected = False
+                    eye_count = 0
+                    if face_count > 0:
+                        x, y, fw, fh = faces[0]
+                        face_roi = gray[y:y+fh, x:x+fw]
+                        smile_cascade = _cv2.CascadeClassifier(
+                            _cv2.data.haarcascades + 'haarcascade_smile.xml'
+                        )
+                        eye_cascade = _cv2.CascadeClassifier(
+                            _cv2.data.haarcascades + 'haarcascade_eye.xml'
+                        )
+                        smiles = smile_cascade.detectMultiScale(face_roi, 1.8, 20, minSize=(25, 25))
+                        eyes = eye_cascade.detectMultiScale(face_roi, 1.1, 5)
+                        smile_detected = len(smiles) > 0
+                        eye_count = len(eyes)
+
+                    image_description = (
+                        f"Image dimensions: {w}x{h}px. "
+                        f"Mean brightness: {mean_brightness:.1f}/255. "
+                        f"Brightness variation: {std_brightness:.1f}. "
+                        f"Faces detected: {face_count}. "
+                        f"Eyes visible: {eye_count}. "
+                        f"Smile detected: {smile_detected}."
+                    )
+            except Exception as cv_err:
+                logger.warning(f"OpenCV feature extraction failed: {cv_err}")
+
+            # ── Build LLM prompt ──────────────────────────────────────
+            if analysis_type == "facial_expression":
+                prompt = f"""You are an expert psychologist analyzing facial expression data extracted from an image.
+
+Image features: {image_description}
+{f'Additional context: {additional_context}' if additional_context else ''}
+
+Based on these features, provide:
+1. Detected emotions and their intensity (0-1 scale)
+2. Facial expression characteristics
+3. Estimated confidence level
+4. Subconscious state indicators
+5. Psychological insights based on facial cues
+
+Return as JSON with keys: emotions, expressions, confidence, subconscious_state, psychological_insights"""
+
+            elif analysis_type == "subconscious":
+                prompt = f"""You are an expert in subconscious psychology analyzing facial data.
+
+Image features: {image_description}
+{f'Additional context: {additional_context}' if additional_context else ''}
+
+Analyze from a subconscious psychology perspective:
+1. Micro-expressions and hidden emotions
+2. Body language and posture indicators
+3. Stress or tension markers
+4. Subconscious thought patterns visible in expressions
+5. Recommendations for mental state optimization
+
+Return as JSON with keys: micro_expressions, body_language, stress_markers, thought_patterns, recommendations"""
+
+            else:  # general
+                prompt = f"""Provide a detailed psychological analysis based on the following image data.
+
+Image features: {image_description}
+{f'Additional context: {additional_context}' if additional_context else ''}
+
+Include:
+1. Primary subjects and their characteristics
+2. Emotional content and psychological aspects
+3. Observable patterns and behaviors
+4. Context interpretation
+5. Key insights
+
+Return as JSON with keys: subjects, emotional_content, patterns, context, insights"""
+
+            # ── Generate analysis ─────────────────────────────────────
+            if self.model:
+                response = self._generate_with_retry(prompt)
+            else:
+                response = self._get_mock_image_response(analysis_type)
+
+            result = {
+                'timestamp': time.time(),
+                'image_path': str(image_path),
+                'analysis_type': analysis_type,
+                'image_features': image_description,
+                'raw_response': response
+            }
+
+            # Try to parse JSON response
+            try:
+                if '{' in response and '}' in response:
+                    start = response.index('{')
+                    end = response.rindex('}') + 1
+                    json_str = response[start:end]
+                    parsed = json.loads(json_str)
+                    result.update(parsed)
+            except Exception as e:
+                logger.warning(f"Could not parse JSON response: {e}")
+
+            self.request_count += 1
+            return result
+
+        except Exception as e:
+            logger.error(f"Error analyzing image: {e}")
+            self.error_count += 1
+            return self._get_error_response(str(e))
+    
+    def _get_mock_image_response(self, analysis_type: str) -> str:
+        """
+        Get mock response for image analysis when model is not available
+        
+        Args:
+            analysis_type: Type of analysis requested
+            
+        Returns:
+            Mock response string
+        """
+        if analysis_type == "facial_expression":
+            return """{
+    "emotions": {"neutral": 0.4, "focused": 0.35, "confident": 0.25},
+    "expressions": ["slight frown", "concentrated gaze", "relaxed jaw"],
+    "confidence": 0.82,
+    "subconscious_state": "Alert and focused",
+    "psychological_insights": "Subject shows concentration with underlying determination"
+}"""
+        elif analysis_type == "subconscious":
+            return """{
+    "micro_expressions": ["brief tension in eye area", "momentary jaw clench"],
+    "body_language": "Forward-leaning posture indicating engagement",
+    "stress_markers": "Minimal stress detected",
+    "thought_patterns": ["Problem-solving mode", "High focus"],
+    "recommendations": ["Maintain current mental state", "Take breaks every 30 minutes"]
+}"""
+        else:
+            return """{
+    "subjects": "Human subject in focused state",
+    "emotional_content": "Neutral to positive emotional expression",
+    "patterns": ["Concentrated attention", "Calm demeanor"],
+    "context": "Professional or academic setting",
+    "insights": "Subject appears engaged and mentally present"
+}"""
+    
     def get_statistics(self) -> Dict[str, Any]:
         """
         Get client statistics
@@ -473,7 +740,7 @@ Format your response as structured JSON with keys: emotional_state, stress_analy
 
 # Example usage
 if __name__ == "__main__":
-    print("Testing IBM Granite AI Client...")
+    print("Testing AI Client (Llama 4 Maverick via WatsonX)...")
     
     try:
         # Initialize client
